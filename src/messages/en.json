@@ -317,6 +317,41 @@
       "interval": "Interval between attempts",
       "humanApproval": "Human approval before closing",
       "humanApprovalDesc": "Requires human approval before the AI closes the sale or schedules"
+    },
+    "step4": {
+      "title": "Which channel will the AI use?",
+      "desc": "Select how the AI will communicate with leads",
+      "primary": "Primary channel",
+      "secondary": "Secondary channel",
+      "none": "None"
+    },
+    "step5transfer": {
+      "title": "Transfer to human",
+      "desc": "Configure who the AI should transfer qualified leads to",
+      "phone": "Closer/salesperson number",
+      "message": "Transition message",
+      "messagePlaceholder": "I'll connect you with our specialist now..."
+    },
+    "step5calendar": {
+      "title": "Meeting scheduling",
+      "desc": "The AI will check availability and schedule meetings automatically",
+      "email": "Google Calendar email",
+      "hint": "The AI will check this calendar to find available slots and create events."
+    },
+    "webhook": {
+      "title": "Configure lead intake",
+      "desc": "Configure your lead source to send data to this URL",
+      "url": "Webhook URL",
+      "saveFirst": "Save the funnel first to generate the URL",
+      "howTo": "How to configure",
+      "format": "expected",
+      "docs": "See full documentation",
+      "typeform": "In Typeform: Go to Connect → Webhooks → paste the URL above. Name, email and phone fields are detected automatically.",
+      "googleForms": "In Google Forms: Use Google Apps Script or Zapier/Make to send data via POST to the URL above when a response is submitted.",
+      "formLP": "In your landing page form: Configure the form action to send a JSON POST with name, email and phone fields to the URL above.",
+      "lpFollowup": "Configure your landing page to send signup data via POST to the URL above. The AI will follow up via email and/or WhatsApp.",
+      "metaTitle": "Meta Lead Ads (Facebook/Instagram)",
+      "metaDesc": "To receive leads from Meta's native forms, you need an approved app with 'leads_retrieval' permission. Use Make/Zapier as an intermediary to send data to this URL via webhook."
     }
   },
   "channels": {

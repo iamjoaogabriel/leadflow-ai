@@ -4,7 +4,7 @@ import { NextIntlClientProvider } from 'next-intl'
 import { getMessages } from 'next-intl/server'
 import { notFound } from 'next/navigation'
 import { routing } from '@/i18n/routing'
-import { ThemeProvider } from '@/components/layout/theme-provider'
+import { ThemeProvider } from 'next-themes'
 import { Toaster } from 'sonner'
 
 export default async function LocaleLayout({
@@ -24,7 +24,7 @@ export default async function LocaleLayout({
         attribute="class"
         defaultTheme="dark"
         themes={['light', 'dark', 'purple']}
-        enableSystem={false}
+        enableSystem
         disableTransitionOnChange
       >
         {children}

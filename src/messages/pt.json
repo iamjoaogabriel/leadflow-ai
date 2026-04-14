@@ -317,6 +317,41 @@
       "interval": "Intervalo entre tentativas",
       "humanApproval": "Aprovação humana antes de fechar",
       "humanApprovalDesc": "Exige que um humano aprove antes da IA fechar a venda ou agendar"
+    },
+    "step4": {
+      "title": "Em qual canal a IA vai atuar?",
+      "desc": "Selecione por onde a IA vai se comunicar com os leads",
+      "primary": "Canal principal",
+      "secondary": "Canal secundário",
+      "none": "Nenhum"
+    },
+    "step5transfer": {
+      "title": "Transferência para humano",
+      "desc": "Configure para quem a IA deve transferir o lead qualificado",
+      "phone": "Número do closer/vendedor",
+      "message": "Mensagem de transição",
+      "messagePlaceholder": "Vou te conectar com nosso especialista agora..."
+    },
+    "step5calendar": {
+      "title": "Agendamento de reunião",
+      "desc": "A IA vai verificar disponibilidade e agendar reuniões automaticamente",
+      "email": "Email do Google Calendar",
+      "hint": "A IA vai consultar este calendário para encontrar horários disponíveis e criar eventos."
+    },
+    "webhook": {
+      "title": "Configurar recebimento de leads",
+      "desc": "Configure sua fonte de leads para enviar dados para esta URL",
+      "url": "URL do Webhook",
+      "saveFirst": "Salve o funil primeiro para gerar a URL",
+      "howTo": "Como configurar",
+      "format": "esperado",
+      "docs": "Ver documentação completa",
+      "typeform": "No Typeform: Vá em Connect → Webhooks → cole a URL acima. Os campos nome, email e telefone serão detectados automaticamente.",
+      "googleForms": "No Google Forms: Use o Google Apps Script ou Zapier/Make para enviar os dados via POST para a URL acima quando uma resposta for enviada.",
+      "formLP": "No formulário da sua landing page: Configure o form action para enviar um POST JSON com os campos name, email e phone para a URL acima.",
+      "lpFollowup": "Configure sua landing page para enviar os dados de cadastro via POST para a URL acima. A IA fará follow-up por email e/ou WhatsApp.",
+      "metaTitle": "Meta Lead Ads (Facebook/Instagram)",
+      "metaDesc": "Para receber leads do formulário nativo da Meta, você precisa de um app aprovado com permissão 'leads_retrieval'. Use o Make/Zapier como intermediário para enviar os dados para esta URL via webhook."
     }
   },
   "channels": {
