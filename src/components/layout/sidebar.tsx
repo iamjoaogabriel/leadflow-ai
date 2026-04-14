@@ -5,11 +5,13 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Link, usePathname } from '@/i18n/routing'
 import { cn } from '@/lib/utils'
+import Image from 'next/image'
 import {
-  LayoutDashboard, MessageSquare, Brain, Settings,
+  LayoutDashboard, Brain, Settings,
   ChevronLeft, ChevronRight, ChevronDown, LogOut,
-  Sun, Moon, Laptop, Users, Zap, BarChart3,
-  Megaphone, Send, Plug, Phone, Mail, Smartphone,
+  Sun, Moon, Laptop, Users, BarChart3,
+  Target, Phone, Mail, Smartphone,
+  Globe, Filter, Headphones, Webhook,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 
@@ -36,33 +38,49 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
     setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  // Hrefs SEM prefixo de locale — o Link do next-intl resolve automaticamente
+  /* ═══════════════════════════════════════
+     NAVEGAÇÃO PRINCIPAL
+     Painel geral → Atendimentos da IA → Campanhas de tráfego
+     ═══════════════════════════════════════ */
   const topNav: NavItem[] = [
-    { href: '/', icon: LayoutDashboard, label: 'Dashboard', id: 'sidebar-dashboard' },
-    { href: '/conversations', icon: MessageSquare, label: 'Conversas', id: 'sidebar-conversations' },
-    { href: '/campaigns', icon: Megaphone, label: 'Campanhas', id: 'sidebar-campaigns' },
+    { href: '/', icon: LayoutDashboard, label: 'Painel', id: 'sidebar-painel' },
+    { href: '/conversations', icon: Headphones, label: 'Atendimentos', id: 'sidebar-atendimentos' },
+    { href: '/campaigns', icon: Target, label: 'Campanhas', id: 'sidebar-campanhas' },
   ]
 
+  /* ═══════════════════════════════════════
+     OPERAÇÃO
+     CRM de leads, funil de vendas, métricas de desempenho
+     ═══════════════════════════════════════ */
+  const operationNav: NavItem[] = [
+    { href: '/leads', icon: Users, label: 'Leads', id: 'sidebar-leads' },
+    { href: '/pipeline', icon: Filter, label: 'Funil de Vendas', id: 'sidebar-funil' },
+    { href: '/analytics', icon: BarChart3, label: 'Desempenho', id: 'sidebar-desempenho' },
+  ]
+
+  /* ═══════════════════════════════════════
+     CONEXÕES (dropdown)
+     Canais por onde a IA conversa com os leads
+     ═══════════════════════════════════════ */
   const navGroups: NavGroup[] = [
     {
-      label: 'Canais', icon: Send, defaultOpen: false,
+      label: 'Conexões', icon: Globe, defaultOpen: false,
       items: [
         { href: '/channels/whatsapp', icon: Phone, label: 'WhatsApp' },
-        { href: '/channels/email', icon: Mail, label: 'Email' },
+        { href: '/channels/email', icon: Mail, label: 'E-mail' },
         { href: '/channels/sms', icon: Smartphone, label: 'SMS' },
       ]
     },
   ]
 
-  const directNav: NavItem[] = [
-    { href: '/leads', icon: Users, label: 'Leads', id: 'sidebar-leads' },
-    { href: '/analytics', icon: BarChart3, label: 'Analytics', id: 'sidebar-analytics' },
-  ]
-
-  const bottomNav: NavItem[] = [
-    { href: '/ai-config', icon: Brain, label: 'Configurar IA', id: 'sidebar-ai' },
-    { href: '/integrations', icon: Plug, label: 'Integrações', id: 'sidebar-integrations' },
-    { href: '/settings', icon: Settings, label: 'Configurações', id: 'sidebar-settings' },
+  /* ═══════════════════════════════════════
+     CONFIGURAR
+     Assistente IA, webhooks para capturar leads, conta
+     ═══════════════════════════════════════ */
+  const configNav: NavItem[] = [
+    { href: '/ai-config', icon: Brain, label: 'Assistente IA', id: 'sidebar-assistente' },
+    { href: '/webhooks', icon: Webhook, label: 'Webhooks & API', id: 'sidebar-webhooks' },
+    { href: '/settings', icon: Settings, label: 'Conta', id: 'sidebar-conta' },
   ]
 
   function isItemActive(href: string) {
@@ -81,23 +99,32 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
 
   return (
     <div className="h-full flex flex-col bg-card transition-all duration-300 font-dm-sans">
-      {/* ═══ LOGO ═══ */}
+
+      {/* ═══════════════════════════════════
+          LOGO
+          Coloque sua logo em /public/logo.png
+          ═══════════════════════════════════ */}
       <div className={cn("h-14 flex items-center border-b border-border px-4 shrink-0", isCollapsed ? "justify-center" : "justify-between")}>
         {!isCollapsed ? (
           <Link href="/" className="flex items-center gap-2.5 group">
-            {/* Substitua pelo <Image src="/logo.png"> da sua marca */}
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#B9F495] to-[#8ee060] flex items-center justify-center shrink-0 shadow-[0_2px_8px_rgba(185,244,149,0.3)] transition-transform group-hover:scale-105">
-              <Zap className="w-3.5 h-3.5 text-black" strokeWidth={2.5} />
+            <div className="w-7 h-7 rounded-lg overflow-hidden shrink-0 transition-transform group-hover:scale-105">
+              <Image
+                src="/logo.png"
+                alt="Marketing Digital AI"
+                width={28}
+                height={28}
+                className="rounded-lg object-contain"
+              />
             </div>
             <div className="flex flex-col leading-none">
-              <span className="text-[13px] font-bold text-foreground tracking-tight">LeadFlow AI</span>
-              <span className="text-[9px] font-medium text-[#909091]">Sales Automation</span>
+              <span className="text-[13px] font-bold text-foreground tracking-tight">Marketing Digital AI</span>
+              <span className="text-[9px] font-medium text-[#909091]">Vendas por Inteligência Artificial</span>
             </div>
           </Link>
         ) : (
           <Link href="/">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#B9F495] to-[#8ee060] flex items-center justify-center hover:scale-105 transition-transform">
-              <Zap className="w-3.5 h-3.5 text-black" strokeWidth={2.5} />
+            <div className="w-7 h-7 rounded-lg overflow-hidden hover:scale-105 transition-transform">
+              <Image src="/logo.png" alt="MDAI" width={28} height={28} className="rounded-lg object-contain" />
             </div>
           </Link>
         )}
@@ -114,13 +141,26 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
 
       {/* ═══ NAV ═══ */}
       <nav className="flex-1 py-3 px-2.5 overflow-y-auto scrollbar-hide">
+
+        {/* Principal */}
         <div className="space-y-0.5">
           {topNav.map(item => (
             <SidebarNavLink key={item.href} item={item} isCollapsed={isCollapsed} isActive={isItemActive(item.href)} />
           ))}
         </div>
 
-        {!isCollapsed && <div className="mt-5 mb-1.5 px-3"><span className="text-[10px] font-bold text-[#909091]/50 uppercase tracking-[0.12em]">Workspace</span></div>}
+        {/* ── Operação ── */}
+        {!isCollapsed && <div className="mt-5 mb-1.5 px-3"><span className="text-[10px] font-bold text-[#909091]/50 uppercase tracking-[0.12em]">Operação</span></div>}
+        {isCollapsed && <div className="my-3 mx-2 h-px bg-border/30" />}
+
+        <div className="space-y-0.5">
+          {operationNav.map(item => (
+            <SidebarNavLink key={item.href} item={item} isCollapsed={isCollapsed} isActive={isItemActive(item.href)} />
+          ))}
+        </div>
+
+        {/* ── Canais (dropdown) ── */}
+        {!isCollapsed && <div className="mt-5 mb-1.5 px-3"><span className="text-[10px] font-bold text-[#909091]/50 uppercase tracking-[0.12em]">Canais</span></div>}
         {isCollapsed && <div className="my-3 mx-2 h-px bg-border/30" />}
 
         {navGroups.map(group => {
@@ -155,17 +195,12 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
           )
         })}
 
-        <div className="space-y-0.5 mt-1">
-          {directNav.map(item => (
-            <SidebarNavLink key={item.href} item={item} isCollapsed={isCollapsed} isActive={isItemActive(item.href)} />
-          ))}
-        </div>
-
+        {/* ── Configurar ── */}
         {!isCollapsed && <div className="mt-5 mb-1.5 px-3"><span className="text-[10px] font-bold text-[#909091]/50 uppercase tracking-[0.12em]">Configurar</span></div>}
         {isCollapsed && <div className="my-3 mx-2 h-px bg-border/30" />}
 
         <div className="space-y-0.5">
-          {bottomNav.map(item => (
+          {configNav.map(item => (
             <SidebarNavLink key={item.href} item={item} isCollapsed={isCollapsed} isActive={isItemActive(item.href)} />
           ))}
         </div>

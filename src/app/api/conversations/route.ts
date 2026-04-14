@@ -1,3 +1,4 @@
+// src/app/api/conversations/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth/session";
@@ -11,42 +12,44 @@ export async function GET() {
 
     const conversations = await prisma.conversation.findMany({
       where: { accountId: session.accountId },
-      orderBy: { updatedAt: "desc" },
-      take: 50,
+      orderBy: { lastMessageAt: { sort: "desc", nulls: "last" } },
+      take: 100,
       include: {
-        lead: {
-          select: { id: true, name: true, phone: true, email: true, status: true },
-        },
+        lead: { select: { name: true, phone: true, email: true } },
         messages: {
           orderBy: { createdAt: "desc" },
           take: 1,
-          select: { content: true, createdAt: true, direction: true },
+          select: { content: true, createdAt: true },
         },
-        _count: {
-          select: { messages: true },
-        },
+        _count: { select: { messages: true } },
       },
     });
 
-    const formatted = conversations.map((c) => ({
-      id: c.id,
-      channel: c.channel,
-      isActive: c.isActive,
-      lastMessageAt: c.updatedAt,
-      lead: {
-        name: c.lead.name,
-        phone: c.lead.phone,
-        email: c.lead.email,
-      },
-      lastMessage: c.messages[0]?.content || null,
-      lastMessageDirection: c.messages[0]?.direction || null,
-      lastMessageTime: c.messages[0]?.createdAt || null,
-      messageCount: c._count.messages,
+    const items = conversations.map((conv) => ({
+      id: conv.id,
+      leadName: conv.lead.name || conv.lead.phone || conv.lead.email || "Sem nome",
+      leadPhone: conv.lead.phone,
+      leadEmail: conv.lead.email,
+      channel: conv.channel,
+      isAIEnabled: conv.isAIEnabled,
+      isActive: conv.isActive,
+      lastMessage: conv.messages[0]?.content || null,
+      lastMessageAt:
+        conv.messages[0]?.createdAt?.toISOString() ||
+        conv.lastMessageAt?.toISOString() ||
+        null,
+      unreadCount: 0,
+      sentiment: conv.sentiment,
+      messageCount: conv._count.messages,
     }));
 
-    return NextResponse.json(formatted);
+    return NextResponse.json(items);
   } catch (error: unknown) {
-    console.error("Get conversations error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("GET /api/conversations error:", msg);
+    return NextResponse.json(
+      { error: "Internal error", message: msg },
+      { status: 500 }
+    );
   }
 }
