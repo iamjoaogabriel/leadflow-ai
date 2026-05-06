@@ -21,11 +21,15 @@ import { logger } from "@/lib/logger";
 
 const log = logger.child({ module: "auth/session" });
 
+export type PlatformRole = "USER" | "SUPER_ADMIN" | "HIPER_ADMIN";
+
 export interface Session {
   userId: string;
   accountId: string;
   email: string;
   role: string;
+  /** Platform-level role (independent of tenant role). */
+  platformRole: PlatformRole;
   /** Whether the account has finished the onboarding wizard. */
   onboardingCompleted: boolean;
 }
@@ -34,6 +38,7 @@ interface DbUserRow {
   id: string;
   email: string;
   name: string | null;
+  platform_role?: PlatformRole;
 }
 interface DbMembershipRow {
   account_id: string;
@@ -79,12 +84,17 @@ export async function getSession(): Promise<Session | null> {
     // 1. Find local user
     const { data: existing } = await admin
       .from("users")
-      .select("id, email, name, supabase_id")
+      .select("id, email, name, supabase_id, platform_role")
       .eq("supabase_id", user.id)
       .maybeSingle();
 
     let dbUser: DbUserRow | null = existing
-      ? { id: existing.id, email: existing.email, name: existing.name }
+      ? {
+          id: existing.id,
+          email: existing.email,
+          name: existing.name,
+          platform_role: (existing.platform_role as PlatformRole) || "USER",
+        }
       : null;
 
     // 2. If not found, look up by email (could be a manually-created user
@@ -92,11 +102,16 @@ export async function getSession(): Promise<Session | null> {
     if (!dbUser && user.email) {
       const { data: byEmail } = await admin
         .from("users")
-        .select("id, email, name")
+        .select("id, email, name, platform_role")
         .eq("email", user.email)
         .maybeSingle();
       if (byEmail) {
-        dbUser = byEmail;
+        dbUser = {
+          id: byEmail.id,
+          email: byEmail.email,
+          name: byEmail.name,
+          platform_role: (byEmail.platform_role as PlatformRole) || "USER",
+        };
         await admin
           .from("users")
           .update({ supabase_id: user.id })
@@ -125,6 +140,7 @@ export async function getSession(): Promise<Session | null> {
         accountId: account.id,
         email: dbUser.email,
         role: "OWNER",
+        platformRole: dbUser.platform_role || "USER",
         onboardingCompleted: !!account.onboarding_completed_at,
       };
     }
@@ -153,6 +169,7 @@ export async function getSession(): Promise<Session | null> {
         accountId: account.id,
         email: dbUser.email,
         role: "OWNER",
+        platformRole: dbUser.platform_role || "USER",
         onboardingCompleted: !!account.onboarding_completed_at,
       };
     }
@@ -162,6 +179,7 @@ export async function getSession(): Promise<Session | null> {
       accountId: membership.account.id,
       email: dbUser.email,
       role: membership.role,
+      platformRole: dbUser.platform_role || "USER",
       onboardingCompleted: !!membership.account.onboarding_completed_at,
     };
   } catch (err: unknown) {

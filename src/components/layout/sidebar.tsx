@@ -34,15 +34,19 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
   const [mounted, setMounted] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const [showLangMenu, setShowLangMenu] = useState(false)
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [platformRole, setPlatformRole] = useState<'USER' | 'SUPER_ADMIN' | 'HIPER_ADMIN'>('USER')
+  const isAdminish = platformRole === 'SUPER_ADMIN' || platformRole === 'HIPER_ADMIN'
 
   useEffect(() => { setMounted(true) }, [])
 
-  // Check if user is super admin
+  // Read the current session once — it already includes platformRole.
   useEffect(() => {
-    fetch('/api/admin/accounts', { method: 'GET' })
-      .then(r => { if (r.ok) setIsSuperAdmin(true); })
-      .catch(() => {});
+    fetch('/api/auth/session')
+      .then(r => (r.ok ? r.json() : null))
+      .then((s: { platformRole?: 'USER' | 'SUPER_ADMIN' | 'HIPER_ADMIN' } | null) => {
+        if (s?.platformRole) setPlatformRole(s.platformRole)
+      })
+      .catch(() => {})
   }, [])
 
   function cycleTheme() {
@@ -178,8 +182,8 @@ export function Sidebar({ isCollapsed, onToggle }: SidebarProps) {
           {configNav.map(item => <SidebarNavLink key={item.href} item={item} isCollapsed={isCollapsed} isActive={isItemActive(item.href)} />)}
         </div>
 
-        {/* ═══ SUPER ADMIN ═══ */}
-        {isSuperAdmin && (
+        {/* ═══ ADMIN (super admin / hiper admin) ═══ */}
+        {isAdminish && (
           <>
             {!isCollapsed && <div className="mt-5 mb-1.5 px-3"><span className="text-[10px] font-bold text-red-400/60 uppercase tracking-[0.12em]">{t('sectionAdmin')}</span></div>}
             {isCollapsed && <div className="my-3 mx-2 h-px bg-red-500/20" />}

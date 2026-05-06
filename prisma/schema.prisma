@@ -29,6 +29,8 @@ model Account {
   stripePriceId     String?  @map("stripe_price_id")
   trialEndsAt       DateTime? @map("trial_ends_at")
   onboardingCompletedAt DateTime? @map("onboarding_completed_at")
+  maxUsers          Int      @default(5) @map("max_users")
+  createdById       String?  @map("created_by_id")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
@@ -44,7 +46,9 @@ model Account {
   eventLogs         EventLog[]
   googleCalendar    GoogleCalendarIntegration?
   metaIntegration   MetaIntegration?
+  createdBy         User?            @relation("AccountCreatedBy", fields: [createdById], references: [id])
 
+  @@index([createdById])
   @@map("accounts")
 }
 
@@ -76,16 +80,24 @@ enum Role {
 }
 
 model User {
-  id         String   @id @default(cuid())
-  supabaseId String   @unique @map("supabase_id")
-  email      String   @unique
-  name       String?
-  avatarUrl  String?  @map("avatar_url")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id           String       @id @default(cuid())
+  supabaseId   String       @unique @map("supabase_id")
+  email        String       @unique
+  name         String?
+  avatarUrl    String?      @map("avatar_url")
+  platformRole PlatformRole @default(USER) @map("platform_role")
+  createdAt    DateTime     @default(now()) @map("created_at")
 
-  memberships AccountMember[]
+  memberships     AccountMember[]
+  createdAccounts Account[]       @relation("AccountCreatedBy")
 
   @@map("users")
+}
+
+enum PlatformRole {
+  USER
+  SUPER_ADMIN
+  HIPER_ADMIN
 }
 
 // ══════════════════════════════════════
