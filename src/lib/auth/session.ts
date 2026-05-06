@@ -2,6 +2,9 @@
 import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import { cookies } from "next/headers";
 import prisma from "@/lib/db/prisma";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ module: "auth/session" });
 
 export interface Session {
   userId: string;
@@ -173,7 +176,18 @@ export async function getSession(): Promise<Session | null> {
       role: membership.role,
     };
   } catch (error) {
-    console.error("[getSession] Error:", error);
+    // We log with full context so the digest in the user's browser maps to a
+    // searchable record in the container logs. Common causes:
+    //   - Postgres column missing (Prisma schema drift; run `prisma db push`)
+    //   - DATABASE_URL pointing to a stale/unavailable Supabase instance
+    //   - Supabase project paused / unreachable
+    //   - Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY env
+    log.error("getSession failed", {
+      err: error,
+      hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      hasSupabaseAnonKey: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      hasDatabaseUrl: !!process.env.DATABASE_URL,
+    });
     return null;
   }
 }
