@@ -98,6 +98,11 @@ export async function loadDashboardOverview(
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
+  // Run reads in 4 sequential batches of 5 parallel queries each.
+  // With Supabase pgBouncer (default pool = 15), firing 20 parallel
+  // reads on every dashboard refresh exhausts the pool under load
+  // (`EMAXCONNSESSION`). Capping concurrency at 5 keeps us safely below
+  // and total wall time stays low because each batch is fast.
   const [
     totalLeads,
     leadsThisMonth,
@@ -119,7 +124,7 @@ export async function loadDashboardOverview(
     aiConfigForGoal,
     qualifiedCount,
     meetingsScheduledCount,
-  ] = await Promise.all([
+  ] = await runChunked([
     prisma.lead.count({ where: { accountId } }),
     prisma.lead.count({ where: { accountId, createdAt: { gte: startOfMonth } } }),
     prisma.lead.count({
@@ -339,6 +344,24 @@ export async function loadDashboardOverview(
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/**
+ * Awaits a list of (lazy) PrismaPromises in fixed-size parallel chunks so we
+ * never blow past the connection pool. Preserves order and full per-element
+ * typing of the input tuple.
+ */
+async function runChunked<T extends readonly Promise<unknown>[]>(
+  tasks: [...T],
+  chunkSize: number = 5
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const out: unknown[] = [];
+  for (let i = 0; i < tasks.length; i += chunkSize) {
+    const slice = tasks.slice(i, i + chunkSize) as Promise<unknown>[];
+    const results = await Promise.all(slice);
+    out.push(...results);
+  }
+  return out as { -readonly [K in keyof T]: Awaited<T[K]> };
 }
 
 function resolveGoalProgress(input: {
