@@ -1,13 +1,15 @@
 // src/app/api/onboarding/complete/route.ts
 //
-// Saves the wizard answers into AIConfig.persona and marks the account's
-// onboarding as completed. After this call the dashboard gate in
-// (dashboard)/layout.tsx stops redirecting.
+// Saves the wizard answers into ai_configs.persona and marks the account's
+// onboarding as completed. Pure Supabase REST — no Prisma.
 
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth/session";
+import { getSupabaseAdmin } from "@/lib/db/supabase-server";
+import { logger } from "@/lib/logger";
 import crypto from "crypto";
+
+const log = logger.child({ module: "onboarding/complete" });
 
 interface OnboardingPayload {
   template?: string;
@@ -56,61 +58,83 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid_channel" }, { status: 400 });
   }
 
-  // Load existing persona to preserve unrelated fields
-  const existing = await prisma.aIConfig.findUnique({
-    where: { accountId: session.accountId },
-  });
-  const existingPersona =
-    (existing?.persona as Record<string, unknown>) || {};
+  const admin = getSupabaseAdmin();
 
-  const webhookId =
-    (existingPersona.pipelineWebhookId as string) ||
-    crypto.randomBytes(16).toString("hex");
+  try {
+    // Read existing persona so we don't overwrite unrelated fields
+    const { data: existing } = await admin
+      .from("ai_configs")
+      .select("id, system_prompt, persona")
+      .eq("account_id", session.accountId)
+      .maybeSingle();
 
-  const persona = {
-    ...existingPersona,
-    pipelineTemplate: body.template,
-    pipelineGoal: body.goal,
-    pipelinePrimaryChannel: primary,
-    pipelineSecondaryChannel: body.secondaryChannel || "",
-    pipelineFirstContact: body.firstContact || "immediate",
-    pipelineWebhookId: webhookId,
-    aiName: body.aiName || existingPersona.aiName || "Sofia",
-    aiRole: body.aiRole || existingPersona.aiRole || "Consultor de vendas",
-    tone: body.tone || existingPersona.tone || "professional_friendly",
-  };
+    const existingPersona =
+      (existing?.persona as Record<string, unknown> | null) || {};
 
-  await prisma.aIConfig.upsert({
-    where: { accountId: session.accountId },
-    create: {
-      accountId: session.accountId,
-      provider: "openai",
-      model: "gpt-4o",
-      systemPrompt:
-        existing?.systemPrompt ||
-        "Você é um assistente de vendas inteligente. Engaje leads de forma natural e profissional, entenda suas necessidades e guie-os para a conversão. Nunca invente informações.",
-      temperature: 0.7,
-      maxTokens: 1000,
-      persona,
-    },
-    update: { persona, updatedAt: new Date() },
-  });
+    const webhookId =
+      (existingPersona.pipelineWebhookId as string) ||
+      crypto.randomBytes(16).toString("hex");
 
-  // Optional business name (saves to account if provided)
-  if (body.businessName && body.businessName.trim()) {
-    await prisma.account.update({
-      where: { id: session.accountId },
-      data: {
-        name: body.businessName.trim(),
-        onboardingCompletedAt: new Date(),
-      },
-    });
-  } else {
-    await prisma.account.update({
-      where: { id: session.accountId },
-      data: { onboardingCompletedAt: new Date() },
-    });
+    const persona: Record<string, unknown> = {
+      ...existingPersona,
+      pipelineTemplate: body.template,
+      pipelineGoal: body.goal,
+      pipelinePrimaryChannel: primary,
+      pipelineSecondaryChannel: body.secondaryChannel || "",
+      pipelineFirstContact: body.firstContact || "immediate",
+      pipelineWebhookId: webhookId,
+      aiName: body.aiName || existingPersona.aiName || "Sofia",
+      aiRole: body.aiRole || existingPersona.aiRole || "Consultor de vendas",
+      tone: body.tone || existingPersona.tone || "professional_friendly",
+    };
+
+    if (existing?.id) {
+      const { error } = await admin
+        .from("ai_configs")
+        .update({
+          persona,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+      if (error) throw new Error(`update ai_config failed: ${error.message}`);
+    } else {
+      const { error } = await admin.from("ai_configs").insert({
+        id: cuid(),
+        account_id: session.accountId,
+        provider: "openai",
+        model: "gpt-4o",
+        system_prompt:
+          "Você é um assistente de vendas inteligente. Engaje leads de forma natural e profissional, entenda suas necessidades e guie-os para a conversão. Nunca invente informações.",
+        temperature: 0.7,
+        max_tokens: 1000,
+        persona,
+      });
+      if (error) throw new Error(`insert ai_config failed: ${error.message}`);
+    }
+
+    const accountUpdate: Record<string, unknown> = {
+      onboarding_completed_at: new Date().toISOString(),
+    };
+    if (body.businessName && body.businessName.trim()) {
+      accountUpdate.name = body.businessName.trim();
+    }
+    const { error: accErr } = await admin
+      .from("accounts")
+      .update(accountUpdate)
+      .eq("id", session.accountId);
+    if (accErr) throw new Error(`update account failed: ${accErr.message}`);
+
+    return NextResponse.json({ ok: true });
+  } catch (err: unknown) {
+    log.error("onboarding complete failed", { err });
+    const msg = err instanceof Error ? err.message : "internal_error";
+    return NextResponse.json(
+      { error: "internal_error", message: msg },
+      { status: 500 }
+    );
   }
+}
 
-  return NextResponse.json({ ok: true });
+function cuid(): string {
+  return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }

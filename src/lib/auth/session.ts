@@ -1,7 +1,22 @@
 // src/lib/auth/session.ts
+//
+// Authenticated session resolver — Supabase-only, NO Prisma.
+//
+// Why: Prisma + Supabase pgBouncer (Supavisor) has been a recurring source
+// of incidents in production (`Tenant or user not found`, `EMAXCONNSESSION`,
+// region mismatches in the connection string, etc). The Supabase REST API
+// has none of that — it goes over HTTPS and never opens a Postgres connection
+// directly.
+//
+// The function returns enough info to gate the dashboard:
+//   { userId, accountId, email, role, onboardingCompletedAt? }
+//
+// On the very first sign-in, it auto-provisions the User + Account +
+// AccountMember + AIConfig rows so the dashboard always finds a tenant.
+
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import prisma from "@/lib/db/prisma";
+import { getSupabaseAdmin } from "@/lib/db/supabase-server";
 import { logger } from "@/lib/logger";
 
 const log = logger.child({ module: "auth/session" });
@@ -11,27 +26,43 @@ export interface Session {
   accountId: string;
   email: string;
   role: string;
+  /** Whether the account has finished the onboarding wizard. */
+  onboardingCompleted: boolean;
+}
+
+interface DbUserRow {
+  id: string;
+  email: string;
+  name: string | null;
+}
+interface DbMembershipRow {
+  account_id: string;
+  role: string;
+  account: {
+    id: string;
+    onboarding_completed_at: string | null;
+  } | null;
 }
 
 export async function getSession(): Promise<Session | null> {
   try {
     const cookieStore = await cookies();
 
-    const supabase = createServerClient(
+    // Cookie-aware client just to read the supabase auth cookies that the
+    // login / OAuth flow already wrote. Used ONLY to resolve the user id.
+    const ssrClient = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
+          getAll: () => cookieStore.getAll(),
+          setAll: (cookiesToSet) => {
             try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
+              for (const { name, value, options } of cookiesToSet) {
+                cookieStore.set(name, value, options);
+              }
             } catch {
-              // Expected in Server Components (read-only)
+              // Server Component: cookie store is read-only. Ignore.
             }
           },
         },
@@ -40,156 +71,198 @@ export async function getSession(): Promise<Session | null> {
 
     const {
       data: { user },
-    } = await supabase.auth.getUser();
-
+    } = await ssrClient.auth.getUser();
     if (!user) return null;
 
-    // Try to find existing user
-    let dbUser = await prisma.user.findUnique({
-      where: { supabaseId: user.id },
-      include: {
-        memberships: {
-          include: {
-            account: { select: { id: true, plan: true, slug: true } },
-          },
-          take: 1,
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
+    const admin = getSupabaseAdmin();
 
-    // Auto-provision or link existing user
-    if (!dbUser) {
-      const email = user.email || "";
-      const includePayload = {
-        memberships: {
-          include: {
-            account: { select: { id: true, plan: true, slug: true } },
-          },
-          take: 1,
-          orderBy: { createdAt: "asc" as const },
-        },
-      };
+    // 1. Find local user
+    const { data: existing } = await admin
+      .from("users")
+      .select("id, email, name, supabase_id")
+      .eq("supabase_id", user.id)
+      .maybeSingle();
 
-      // Check if a user with this email already exists (different supabaseId)
-      const existingByEmail = await prisma.user.findUnique({
-        where: { email },
-        include: includePayload,
-      });
+    let dbUser: DbUserRow | null = existing
+      ? { id: existing.id, email: existing.email, name: existing.name }
+      : null;
 
-      if (existingByEmail) {
-        // Link existing user to this Supabase account
-        dbUser = await prisma.user.update({
-          where: { id: existingByEmail.id },
-          data: { supabaseId: user.id },
-          include: includePayload,
-        });
-
-        // If user exists but has no memberships, create one
-        if (dbUser.memberships.length === 0) {
-          const slug =
-            email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 30) +
-            "-" + Date.now().toString(36);
-
-          await prisma.accountMember.create({
-            data: {
-              role: "OWNER",
-              user: { connect: { id: dbUser.id } },
-              account: {
-                create: {
-                  name: `${existingByEmail.name || "User"}'s Workspace`,
-                  slug,
-                  plan: "FREE",
-                  aiConfig: {
-                    create: {
-                      provider: "openai",
-                      model: "gpt-4o",
-                      systemPrompt:
-                        "You are a professional sales assistant. Be natural, helpful, and guide leads toward conversion.",
-                      temperature: 0.7,
-                      maxTokens: 1000,
-                    },
-                  },
-                },
-              },
-            },
-          });
-
-          // Reload with memberships
-          dbUser = await prisma.user.findUnique({
-            where: { id: dbUser.id },
-            include: includePayload,
-          });
-        }
-      } else {
-        // Truly new user — create everything
-        const name =
-          user.user_metadata?.full_name ||
-          user.user_metadata?.name ||
-          email.split("@")[0] ||
-          "User";
-        const slug =
-          email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 30) +
-          "-" + Date.now().toString(36);
-
-        dbUser = await prisma.user.create({
-          data: {
-            supabaseId: user.id,
-            email,
-            name,
-            memberships: {
-              create: {
-                role: "OWNER",
-                account: {
-                  create: {
-                    name: `${name}'s Workspace`,
-                    slug,
-                    plan: "FREE",
-                    aiConfig: {
-                      create: {
-                        provider: "openai",
-                        model: "gpt-4o",
-                        systemPrompt:
-                          "You are a professional sales assistant. Be natural, helpful, and guide leads toward conversion.",
-                        temperature: 0.7,
-                        maxTokens: 1000,
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          include: includePayload,
-        });
+    // 2. If not found, look up by email (could be a manually-created user
+    //    that hasn't been linked to a Supabase auth identity yet)
+    if (!dbUser && user.email) {
+      const { data: byEmail } = await admin
+        .from("users")
+        .select("id, email, name")
+        .eq("email", user.email)
+        .maybeSingle();
+      if (byEmail) {
+        dbUser = byEmail;
+        await admin
+          .from("users")
+          .update({ supabase_id: user.id })
+          .eq("id", byEmail.id);
       }
     }
 
-    if (!dbUser || dbUser.memberships.length === 0) return null;
+    // 3. Auto-provision a brand-new user + account + membership + AI config
+    if (!dbUser) {
+      const email = user.email || "";
+      const name =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        email.split("@")[0] ||
+        "User";
 
-    const membership = dbUser.memberships[0];
+      const { account, user: created } = await provisionTenant({
+        supabaseUserId: user.id,
+        email,
+        name,
+      });
+      dbUser = created;
+      // Skip lookup — we already know the membership we just created.
+      return {
+        userId: dbUser.id,
+        accountId: account.id,
+        email: dbUser.email,
+        role: "OWNER",
+        onboardingCompleted: !!account.onboarding_completed_at,
+      };
+    }
+
+    // 4. Find the user's first membership + account
+    const { data: membership } = await admin
+      .from("account_members")
+      .select(
+        "account_id, role, account:accounts ( id, onboarding_completed_at )"
+      )
+      .eq("user_id", dbUser.id)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle<DbMembershipRow>();
+
+    if (!membership || !membership.account) {
+      // User exists but has no account — provision a workspace for them.
+      const { account } = await provisionTenant({
+        supabaseUserId: user.id,
+        email: dbUser.email,
+        name: dbUser.name || dbUser.email.split("@")[0],
+        existingUserId: dbUser.id,
+      });
+      return {
+        userId: dbUser.id,
+        accountId: account.id,
+        email: dbUser.email,
+        role: "OWNER",
+        onboardingCompleted: !!account.onboarding_completed_at,
+      };
+    }
 
     return {
       userId: dbUser.id,
-      accountId: membership.accountId,
+      accountId: membership.account.id,
       email: dbUser.email,
       role: membership.role,
+      onboardingCompleted: !!membership.account.onboarding_completed_at,
     };
-  } catch (error) {
-    // We log with full context so the digest in the user's browser maps to a
-    // searchable record in the container logs. Common causes:
-    //   - Postgres column missing (Prisma schema drift; run `prisma db push`)
-    //   - DATABASE_URL pointing to a stale/unavailable Supabase instance
-    //   - Supabase project paused / unreachable
-    //   - Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY env
+  } catch (err: unknown) {
     log.error("getSession failed", {
-      err: error,
+      err,
       hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
       hasSupabaseAnonKey: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-      hasDatabaseUrl: !!process.env.DATABASE_URL,
+      hasServiceRole: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     });
     return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROVISIONING — first-run tenant bootstrap (REST only)
+// ─────────────────────────────────────────────────────────────
+
+interface ProvisionInput {
+  supabaseUserId: string;
+  email: string;
+  name: string;
+  existingUserId?: string;
+}
+
+interface ProvisionedTenant {
+  account: { id: string; onboarding_completed_at: string | null };
+  user: DbUserRow;
+}
+
+async function provisionTenant(input: ProvisionInput): Promise<ProvisionedTenant> {
+  const admin = getSupabaseAdmin();
+  const slug =
+    input.email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "-").slice(0, 30) +
+    "-" +
+    Date.now().toString(36);
+
+  // Use Supabase REST inserts. We can't do a multi-statement transaction over
+  // REST, but the schema's foreign-key cascades + the fact that this only
+  // runs on first sign-in make ordering correctness sufficient.
+
+  const userId = input.existingUserId || cuid();
+  if (!input.existingUserId) {
+    const { error: userErr } = await admin.from("users").insert({
+      id: userId,
+      supabase_id: input.supabaseUserId,
+      email: input.email,
+      name: input.name,
+    });
+    if (userErr) throw new Error(`provision user failed: ${userErr.message}`);
+  }
+
+  const accountId = cuid();
+  const { error: accErr } = await admin.from("accounts").insert({
+    id: accountId,
+    name: `${input.name}'s Workspace`,
+    slug,
+    plan: "FREE",
+    locale: "pt",
+    timezone: "America/Sao_Paulo",
+  });
+  if (accErr) throw new Error(`provision account failed: ${accErr.message}`);
+
+  const { error: memErr } = await admin.from("account_members").insert({
+    id: cuid(),
+    account_id: accountId,
+    user_id: userId,
+    role: "OWNER",
+  });
+  if (memErr) throw new Error(`provision membership failed: ${memErr.message}`);
+
+  const { error: cfgErr } = await admin.from("ai_configs").insert({
+    id: cuid(),
+    account_id: accountId,
+    provider: "openai",
+    model: "gpt-4o",
+    system_prompt:
+      "You are a professional sales assistant. Be natural, helpful, and guide leads toward conversion.",
+    temperature: 0.7,
+    max_tokens: 1000,
+  });
+  if (cfgErr) {
+    // Non-fatal — ai_config can be created later in onboarding.
+    log.warn("provision ai_config failed (non-fatal)", { err: cfgErr.message });
+  }
+
+  return {
+    account: { id: accountId, onboarding_completed_at: null },
+    user: { id: userId, email: input.email, name: input.name },
+  };
+}
+
+/**
+ * Lightweight cuid-like id generator (we don't need crypto-strong, just
+ * collision-resistant for a few accounts/users per second).
+ */
+function cuid(): string {
+  return (
+    "c" +
+    Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 10)
+  );
 }
 
 /**
@@ -199,7 +272,7 @@ export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();
   const all = cookieStore.getAll();
   for (const { name } of all) {
-    if (name.startsWith("sb-") || name === "sb-access-token" || name === "sb-refresh-token") {
+    if (name.startsWith("sb-")) {
       cookieStore.delete(name);
     }
   }

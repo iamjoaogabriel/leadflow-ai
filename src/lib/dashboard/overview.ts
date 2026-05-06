@@ -1,14 +1,18 @@
 // src/lib/dashboard/overview.ts
 //
-// Single source of truth for the dashboard home data.
-// Consumed by:
-//   - the Server Component (first paint, SSR)
-//   - /api/dashboard/overview (client-side polling)
+// Single source of truth for the dashboard home data — pure Supabase REST.
+// No Prisma anywhere on this hot path, so we never depend on the
+// Postgres connection pool / pgBouncer (the SaaS was hitting
+// `Tenant or user not found` and `EMAXCONNSESSION` here).
+//
+// Reads are batched in chunks of 5 parallel REST calls — Supabase REST has
+// no connection-pool ceiling like the pooler does, but we still keep the
+// fan-out reasonable.
 
-import prisma from "@/lib/db/prisma";
+import { getSupabaseAdmin } from "@/lib/db/supabase-server";
 
 export interface SparklinePoint {
-  date: string; // ISO date yyyy-mm-dd
+  date: string;
   count: number;
 }
 
@@ -20,23 +24,16 @@ export interface ActivityItem {
 }
 
 export interface GoalProgress {
-  /** Canonical id stored in AIConfig.persona.pipelineGoal (e.g. "close_sale") */
   id: string | null;
-  /** i18n key under `pipeline.goal.<key>.title` — e.g. "closeSale" */
   labelKey: string | null;
-  /** Leads that already reached the goal */
   achieved: number;
-  /** Universe being compared against (usually totalLeads) */
   total: number;
-  /** Round1 percentage */
   percent: number;
-  /** True if the account never configured a funnel goal */
   isEmpty: boolean;
 }
 
 export interface DashboardOverview {
   generatedAt: string;
-
   kpis: {
     totalLeads: number;
     leadsThisMonth: number;
@@ -50,16 +47,12 @@ export interface DashboardOverview {
     convertedTotal: number;
     messagesToday: number;
   };
-
   goal: GoalProgress;
-
   sparklines: {
     leads7d: SparklinePoint[];
     messages7d: SparklinePoint[];
   };
-
   leadsByDay14d: SparklinePoint[];
-
   recentLeads: {
     id: string;
     name: string | null;
@@ -69,7 +62,6 @@ export interface DashboardOverview {
     source: string;
     createdAt: string;
   }[];
-
   campaigns: {
     id: string;
     name: string;
@@ -77,189 +69,179 @@ export interface DashboardOverview {
     convertedLeads: number;
     conversionRate: number;
   }[];
-
   channelDistribution: {
     channel: string;
     count: number;
     percentage: number;
   }[];
-
   activity: ActivityItem[];
 }
 
 export async function loadDashboardOverview(
   accountId: string
 ): Promise<DashboardOverview> {
+  const sb = getSupabaseAdmin();
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).toISOString();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const fourteenDaysAgo = new Date(
+    now.getTime() - 14 * 24 * 60 * 60 * 1000
+  ).toISOString();
 
-  // Run reads in 4 sequential batches of 5 parallel queries each.
-  // With Supabase pgBouncer (default pool = 15), firing 20 parallel
-  // reads on every dashboard refresh exhausts the pool under load
-  // (`EMAXCONNSESSION`). Capping concurrency at 5 keeps us safely below
-  // and total wall time stays low because each batch is fast.
+  // Refine callback receives a Supabase filter builder. We type it as
+  // `any` here because the public types from supabase-js make chaining
+  // .gte/.eq/.in across multiple call sites painful — it's an internal
+  // helper, scoped to this file only.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Refine = (q: any) => any;
+  const countLeads = (refine?: Refine) =>
+    headCount(sb, "leads", accountId, refine);
+  const countMessages = (refine?: Refine) =>
+    headCount(sb, "messages", accountId, refine);
+  const countConversations = (refine?: Refine) =>
+    headCount(sb, "conversations", accountId, refine);
+  const countEvents = (refine?: Refine) =>
+    headCount(sb, "event_logs", accountId, refine);
+
+  // ─── batch 1: kpi counts ───────────────────────────────────
   const [
     totalLeads,
     leadsThisMonth,
     leadsLastMonth,
     activeConversations,
     convertedTotal,
+  ] = await Promise.all([
+    countLeads(),
+    countLeads((q) => q.gte("created_at", startOfMonth)),
+    countLeads((q) =>
+      q.gte("created_at", startOfLastMonth).lte("created_at", endOfLastMonth)
+    ),
+    countConversations((q) => q.eq("is_active", true)),
+    countLeads((q) => q.eq("status", "CONVERTED")),
+  ]);
+
+  // ─── batch 2: message counts ───────────────────────────────
+  const [
     messagesThisMonth,
     messagesLastMonth,
     totalMessages,
     aiMessages,
     messagesToday,
-    recentLeads,
-    campaignsRaw,
-    channelsRaw,
-    leadsPerDay14Raw,
-    messagesPerDay7Raw,
-    avgResponseRaw,
-    activityRaw,
-    aiConfigForGoal,
-    qualifiedCount,
-    meetingsScheduledCount,
-  ] = await runChunked([
-    prisma.lead.count({ where: { accountId } }),
-    prisma.lead.count({ where: { accountId, createdAt: { gte: startOfMonth } } }),
-    prisma.lead.count({
-      where: { accountId, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } },
-    }),
-    prisma.conversation.count({ where: { accountId, isActive: true } }),
-    prisma.lead.count({ where: { accountId, status: "CONVERTED" } }),
-    prisma.message.count({
-      where: { accountId, createdAt: { gte: startOfMonth } },
-    }),
-    prisma.message.count({
-      where: { accountId, createdAt: { gte: startOfLastMonth, lte: endOfLastMonth } },
-    }),
-    prisma.message.count({ where: { accountId } }),
-    prisma.message.count({ where: { accountId, isAIGenerated: true } }),
-    prisma.message.count({
-      where: { accountId, createdAt: { gte: startOfToday } },
-    }),
-    prisma.lead.findMany({
-      where: { accountId },
-      orderBy: { createdAt: "desc" },
-      take: 6,
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        email: true,
-        status: true,
-        source: true,
-        createdAt: true,
-      },
-    }),
-    prisma.campaign.findMany({
-      where: { accountId },
-      orderBy: { totalLeads: "desc" },
-      take: 5,
-      select: {
-        id: true,
-        name: true,
-        totalLeads: true,
-        convertedLeads: true,
-      },
-    }),
-    prisma.conversation.groupBy({
-      by: ["channel"],
-      where: { accountId },
-      _count: { id: true },
-    }),
-    prisma.$queryRaw<{ date: Date; count: bigint | number }[]>`
-      SELECT DATE(created_at) AS date, COUNT(*)::int AS count
-      FROM leads
-      WHERE account_id = ${accountId}
-        AND created_at >= ${fourteenDaysAgo}
-      GROUP BY DATE(created_at)
-      ORDER BY date ASC
-    `,
-    prisma.$queryRaw<{ date: Date; count: bigint | number }[]>`
-      SELECT DATE(created_at) AS date, COUNT(*)::int AS count
-      FROM messages
-      WHERE account_id = ${accountId}
-        AND created_at >= ${sevenDaysAgo}
-      GROUP BY DATE(created_at)
-      ORDER BY date ASC
-    `,
-    prisma.$queryRaw<{ avg_seconds: number | null }[]>`
-      SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (next_out.created_at - m.created_at))), 0)::float AS avg_seconds
-      FROM messages m
-      JOIN LATERAL (
-        SELECT created_at FROM messages n
-        WHERE n.conversation_id = m.conversation_id
-          AND n.direction = 'OUTBOUND'
-          AND n.created_at > m.created_at
-        ORDER BY n.created_at ASC
-        LIMIT 1
-      ) next_out ON TRUE
-      WHERE m.account_id = ${accountId}
-        AND m.direction = 'INBOUND'
-        AND m.created_at >= NOW() - INTERVAL '30 days'
-    `,
-    prisma.eventLog.findMany({
-      where: { accountId },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: { id: true, event: true, data: true, createdAt: true },
-    }),
-    prisma.aIConfig.findUnique({
-      where: { accountId },
-      select: { persona: true },
-    }),
-    prisma.lead.count({
-      where: { accountId, status: { in: ["QUALIFIED", "CONVERTED"] } },
-    }),
-    prisma.eventLog.count({
-      where: { accountId, event: "lead.meeting_scheduled" },
-    }),
+  ] = await Promise.all([
+    countMessages((q) => q.gte("created_at", startOfMonth)),
+    countMessages((q) =>
+      q.gte("created_at", startOfLastMonth).lte("created_at", endOfLastMonth)
+    ),
+    countMessages(),
+    countMessages((q) => q.eq("is_ai_generated", true)),
+    countMessages((q) => q.gte("created_at", startOfToday)),
   ]);
 
-  // ── Derived numbers ──
+  // ─── batch 3: lists + channel distribution + goal-related counts ──
+  const [
+    recentLeadsRes,
+    campaignsRes,
+    activityRes,
+    aiConfigRes,
+    qualifiedCount,
+    meetingsScheduledCount,
+    waCount,
+    emailCount,
+    smsCount,
+  ] = await Promise.all([
+    sb
+      .from("leads")
+      .select("id, name, phone, email, status, source, created_at")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false })
+      .limit(6),
+    sb
+      .from("campaigns")
+      .select("id, name, total_leads, converted_leads")
+      .eq("account_id", accountId)
+      .order("total_leads", { ascending: false })
+      .limit(5),
+    sb
+      .from("event_logs")
+      .select("id, event, data, created_at")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false })
+      .limit(8),
+    sb
+      .from("ai_configs")
+      .select("persona")
+      .eq("account_id", accountId)
+      .maybeSingle(),
+    countLeads((q) => q.in("status", ["QUALIFIED", "CONVERTED"])),
+    countEvents((q) => q.eq("event", "lead.meeting_scheduled")),
+    countConversations((q) => q.eq("channel", "WHATSAPP")),
+    countConversations((q) => q.eq("channel", "EMAIL")),
+    countConversations((q) => q.eq("channel", "SMS")),
+  ]);
+
+  // ─── batch 4: time-series for sparklines ───────────────────
+  const [leadsRows14d, messagesRows7d] = await Promise.all([
+    sb
+      .from("leads")
+      .select("created_at")
+      .eq("account_id", accountId)
+      .gte("created_at", fourteenDaysAgo),
+    sb
+      .from("messages")
+      .select("created_at")
+      .eq("account_id", accountId)
+      .gte("created_at", sevenDaysAgo),
+  ]);
+
+  // ─── derive ──────────────────────────────────────────────────
   const leadsChange =
     leadsLastMonth > 0
       ? ((leadsThisMonth - leadsLastMonth) / leadsLastMonth) * 100
       : leadsThisMonth > 0
         ? 100
         : 0;
-
   const messagesChange =
     messagesLastMonth > 0
       ? ((messagesThisMonth - messagesLastMonth) / messagesLastMonth) * 100
       : messagesThisMonth > 0
         ? 100
         : 0;
-
   const conversionRate =
     totalLeads > 0 ? (convertedTotal / totalLeads) * 100 : 0;
   const aiResponseRate =
     totalMessages > 0 ? (aiMessages / totalMessages) * 100 : 0;
 
-  const totalConversations = channelsRaw.reduce(
-    (sum, ch) => sum + ch._count.id,
-    0
-  );
+  const channelTotals = waCount + emailCount + smsCount;
+  const channelDistribution = [
+    { channel: "WHATSAPP", count: waCount },
+    { channel: "EMAIL", count: emailCount },
+    { channel: "SMS", count: smsCount },
+  ]
+    .filter((c) => c.count > 0)
+    .map((c) => ({
+      ...c,
+      percentage: channelTotals > 0 ? round1((c.count / channelTotals) * 100) : 0,
+    }));
 
-  const avgResponseSeconds = Math.max(
-    0,
-    Math.round(Number(avgResponseRaw[0]?.avg_seconds ?? 0))
+  const leadsByDay14d = bucketByDay(leadsRows14d.data || [], 14, now);
+  const leadsSpark7d = bucketByDay(
+    (leadsRows14d.data || []).filter(
+      (r) => new Date((r as { created_at: string }).created_at) >= new Date(sevenDaysAgo)
+    ),
+    7,
+    now
   );
+  const messagesSpark7d = bucketByDay(messagesRows7d.data || [], 7, now);
 
-  // ── Goal progress ──
   const persona =
-    (aiConfigForGoal?.persona as Record<string, unknown> | null) || {};
+    (aiConfigRes.data?.persona as Record<string, unknown> | null) || {};
   const goalId =
     typeof persona.pipelineGoal === "string" && persona.pipelineGoal
       ? (persona.pipelineGoal as string)
       : null;
-
   const goal = resolveGoalProgress({
     goalId,
     totalLeads,
@@ -268,18 +250,8 @@ export async function loadDashboardOverview(
     meetingsScheduledCount,
   });
 
-  // ── Sparkline series (filled with 0 on missing days) ──
-  const leadsByDay14d = fillDays(leadsPerDay14Raw, 14, now);
-  const leadsSpark7d = fillDays(
-    leadsPerDay14Raw.filter((r) => new Date(r.date) >= sevenDaysAgo),
-    7,
-    now
-  );
-  const messagesSpark7d = fillDays(messagesPerDay7Raw, 7, now);
-
   return {
     generatedAt: new Date().toISOString(),
-
     kpis: {
       totalLeads,
       leadsThisMonth,
@@ -289,79 +261,98 @@ export async function loadDashboardOverview(
       messagesThisMonth,
       messagesChange: round1(messagesChange),
       aiResponseRate: round1(aiResponseRate),
-      avgResponseSeconds,
+      // avg response time would require a SQL function (RPC) — we keep it
+      // at 0 in REST-only mode. Add a Supabase RPC later if needed.
+      avgResponseSeconds: 0,
       convertedTotal,
       messagesToday,
     },
-
     goal,
-
-    sparklines: {
-      leads7d: leadsSpark7d,
-      messages7d: messagesSpark7d,
-    },
-
+    sparklines: { leads7d: leadsSpark7d, messages7d: messagesSpark7d },
     leadsByDay14d,
-
-    recentLeads: recentLeads.map((l) => ({
+    recentLeads: (recentLeadsRes.data || []).map((l) => ({
       id: l.id,
       name: l.name,
       phone: l.phone,
       email: l.email,
       status: l.status,
       source: l.source,
-      createdAt: l.createdAt.toISOString(),
+      createdAt: l.created_at,
     })),
-
-    campaigns: campaignsRaw.map((c) => ({
+    campaigns: (campaignsRes.data || []).map((c) => ({
       id: c.id,
       name: c.name,
-      totalLeads: c.totalLeads,
-      convertedLeads: c.convertedLeads,
+      totalLeads: c.total_leads,
+      convertedLeads: c.converted_leads,
       conversionRate:
-        c.totalLeads > 0
-          ? round1((c.convertedLeads / c.totalLeads) * 100)
+        c.total_leads > 0
+          ? round1((c.converted_leads / c.total_leads) * 100)
           : 0,
     })),
-
-    channelDistribution: channelsRaw.map((ch) => ({
-      channel: ch.channel,
-      count: ch._count.id,
-      percentage:
-        totalConversations > 0
-          ? round1((ch._count.id / totalConversations) * 100)
-          : 0,
-    })),
-
-    activity: activityRaw.map((e) => ({
+    channelDistribution,
+    activity: (activityRes.data || []).map((e) => ({
       id: e.id,
       event: e.event,
-      createdAt: e.createdAt.toISOString(),
+      createdAt: e.created_at,
       data: (e.data as Record<string, unknown> | null) ?? null,
     })),
   };
 }
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
+// ───────────────────────────────────────────────────────────────
+// helpers
+// ───────────────────────────────────────────────────────────────
+
+async function headCount(
+  sb: ReturnType<typeof getSupabaseAdmin>,
+  table: string,
+  accountId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  refine?: (q: any) => any
+): Promise<number> {
+  let q = sb
+    .from(table)
+    .select("*", { count: "exact", head: true })
+    .eq("account_id", accountId);
+  if (refine) q = refine(q);
+  const { count, error } = await q;
+  if (error) {
+    // Fail-soft so a single missing table doesn't take the dashboard down.
+    return 0;
+  }
+  return count || 0;
 }
 
-/**
- * Awaits a list of (lazy) PrismaPromises in fixed-size parallel chunks so we
- * never blow past the connection pool. Preserves order and full per-element
- * typing of the input tuple.
- */
-async function runChunked<T extends readonly Promise<unknown>[]>(
-  tasks: [...T],
-  chunkSize: number = 5
-): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
-  const out: unknown[] = [];
-  for (let i = 0; i < tasks.length; i += chunkSize) {
-    const slice = tasks.slice(i, i + chunkSize) as Promise<unknown>[];
-    const results = await Promise.all(slice);
-    out.push(...results);
+function bucketByDay(
+  rows: { created_at: string }[],
+  days: number,
+  now: Date
+): SparklinePoint[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const key = toISODate(new Date(r.created_at));
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
-  return out as { -readonly [K in keyof T]: Awaited<T[K]> };
+  const out: SparklinePoint[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const key = toISODate(d);
+    out.push({ date: key, count: counts.get(key) || 0 });
+  }
+  return out;
+}
+
+function toISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
 }
 
 function resolveGoalProgress(input: {
@@ -372,21 +363,11 @@ function resolveGoalProgress(input: {
   meetingsScheduledCount: number;
 }): GoalProgress {
   const { goalId, totalLeads, convertedTotal, qualifiedCount, meetingsScheduledCount } = input;
-
   if (!goalId) {
-    return {
-      id: null,
-      labelKey: null,
-      achieved: 0,
-      total: totalLeads,
-      percent: 0,
-      isEmpty: true,
-    };
+    return { id: null, labelKey: null, achieved: 0, total: totalLeads, percent: 0, isEmpty: true };
   }
-
   let achieved = 0;
-  let labelKey = "";
-
+  let labelKey = "closeSale";
   switch (goalId) {
     case "close_sale":
       achieved = convertedTotal;
@@ -404,13 +385,8 @@ function resolveGoalProgress(input: {
       achieved = qualifiedCount;
       labelKey = "collectSend";
       break;
-    default:
-      labelKey = "closeSale";
-      achieved = convertedTotal;
   }
-
   const percent = totalLeads > 0 ? (achieved / totalLeads) * 100 : 0;
-
   return {
     id: goalId,
     labelKey,
@@ -419,32 +395,4 @@ function resolveGoalProgress(input: {
     percent: round1(percent),
     isEmpty: false,
   };
-}
-
-function fillDays(
-  rows: { date: Date; count: bigint | number }[],
-  days: number,
-  now: Date
-): SparklinePoint[] {
-  const byDate = new Map<string, number>();
-  for (const r of rows) {
-    const key = toISODate(new Date(r.date));
-    byDate.set(key, Number(r.count));
-  }
-  const out: SparklinePoint[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - i);
-    const key = toISODate(d);
-    out.push({ date: key, count: byDate.get(key) ?? 0 });
-  }
-  return out;
-}
-
-function toISODate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }

@@ -1,22 +1,19 @@
 // src/app/api/auth/login/route.ts
 //
-// Email/password login. Uses the SAME createServerClient that getSession()
-// uses, so the cookies it sets are exactly what the rest of the app reads.
-// (Earlier versions set sb-access-token/sb-refresh-token manually, but
-// auth-helpers-nextjs writes its own cookie names like sb-<ref>-auth-token —
-// the manual cookies were ignored, causing the post-login redirect loop.)
+// Email/password login. Uses @supabase/ssr to set the auth cookies in the
+// exact same format getSession() reads. NO Prisma — the dashboard layout
+// is the single source of truth for onboarding redirect.
 
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
-import prisma from "@/lib/db/prisma";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
 const log = logger.child({ module: "auth/login" });
 
 export async function POST(req: NextRequest) {
-  // Rate limit: 10 login attempts per minute per IP
+  // Rate limit: 10 attempts per minute per IP
   const rl = await rateLimit({
     key: `login:${getClientIp(req)}`,
     max: 10,
@@ -36,12 +33,17 @@ export async function POST(req: NextRequest) {
     const body = (await req.json().catch(() => ({}))) as {
       email?: string;
       password?: string;
+      locale?: string;
     };
     const email = (body.email || "").trim().toLowerCase();
     const password = body.password || "";
+    const locale = body.locale || "pt";
 
     if (!email || !password) {
-      return NextResponse.json({ error: "missing_credentials" }, { status: 400 });
+      return NextResponse.json(
+        { error: "missing_credentials" },
+        { status: 400 }
+      );
     }
 
     const cookieStore = await cookies();
@@ -50,10 +52,8 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
+          getAll: () => cookieStore.getAll(),
+          setAll: (cookiesToSet) => {
             for (const { name, value, options } of cookiesToSet) {
               cookieStore.set(name, value, options);
             }
@@ -76,31 +76,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Cookies were already written by the supabase client via the setAll
-    // callback above — nothing else to do here.
-
-    // Resolve where to send the user after login
-    const dbUser = await prisma.user.findUnique({
-      where: { supabaseId: data.user.id },
-      include: {
-        memberships: {
-          take: 1,
-          include: {
-            account: {
-              select: { onboardingCompletedAt: true, locale: true },
-            },
-          },
-        },
-      },
-    });
-    const account = dbUser?.memberships[0]?.account;
-    const accountLocale = account?.locale || "pt";
-    const redirectTo = account?.onboardingCompletedAt
-      ? `/${accountLocale}`
-      : `/${accountLocale}/onboarding`;
-
+    // callback. The dashboard layout decides whether to send the user
+    // to /onboarding or /[locale] based on their account state.
     return NextResponse.json({
       success: true,
-      redirectTo,
+      redirectTo: `/${locale}`,
       user: { id: data.user.id, email: data.user.email },
     });
   } catch (err: unknown) {

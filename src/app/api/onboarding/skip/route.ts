@@ -1,20 +1,27 @@
 // src/app/api/onboarding/skip/route.ts
 //
-// Marks onboarding as completed without saving wizard data. The user can
-// edit everything later in Pipeline / AI Config.
+// Marks onboarding as completed without saving wizard data. Pure Supabase
+// REST — no Prisma.
 
 import { NextResponse } from "next/server";
-import prisma from "@/lib/db/prisma";
 import { getSession } from "@/lib/auth/session";
+import { getSupabaseAdmin } from "@/lib/db/supabase-server";
 
 export async function POST() {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  await prisma.account.update({
-    where: { id: session.accountId },
-    data: { onboardingCompletedAt: new Date() },
-  });
+  const admin = getSupabaseAdmin();
+  const { error } = await admin
+    .from("accounts")
+    .update({ onboarding_completed_at: new Date().toISOString() })
+    .eq("id", session.accountId);
+  if (error) {
+    return NextResponse.json(
+      { error: "internal_error", message: error.message },
+      { status: 500 }
+    );
+  }
   return NextResponse.json({ ok: true });
 }
