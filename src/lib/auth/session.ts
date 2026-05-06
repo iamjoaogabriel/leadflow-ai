@@ -1,5 +1,5 @@
 // src/lib/auth/session.ts
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import prisma from "@/lib/db/prisma";
 import { logger } from "@/lib/logger";

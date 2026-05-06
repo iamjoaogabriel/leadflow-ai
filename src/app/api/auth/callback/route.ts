@@ -1,6 +1,6 @@
 // src/app/api/auth/callback/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/ssr";
 import prisma from "@/lib/db/prisma";
 import { cookies } from "next/headers";
 import { getStripe } from "@/lib/billing/stripe";
