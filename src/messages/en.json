@@ -226,6 +226,19 @@
   "dashboard": {
     "title": "Dashboard",
     "subtitle": "Overview of your AI-powered digital marketing",
+    "empty": {
+      "heroTitle": "Your platform is ready",
+      "heroSubtitle": "Set up your AI in three quick steps and start converting leads today.",
+      "step1Title": "Configure the funnel",
+      "step1Desc": "Define the AI's goal, the channel and the tone.",
+      "step1Cta": "Configure funnel",
+      "step2Title": "Connect a channel",
+      "step2Desc": "WhatsApp, email or SMS — pick where the AI will talk.",
+      "step2Cta": "Connect channel",
+      "step3Title": "Register a campaign",
+      "step3Desc": "Upload the ad so the AI understands what was promised to the lead.",
+      "step3Cta": "Create campaign"
+    },
     "goalHero": {
       "eyebrow": "Your AI's active goal",
       "eyebrowEmpty": "Goal not set yet",

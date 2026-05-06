@@ -14,6 +14,7 @@ import type {
 import {
   Activity,
   ArrowDownRight,
+  ArrowRight,
   ArrowUpRight,
   Bot,
   Brain,
@@ -27,6 +28,8 @@ import {
   MessageCircle,
   MessageSquare,
   Phone,
+  Plug,
+  Rocket,
   Target,
   TrendingUp,
   Users,
@@ -81,7 +84,7 @@ export function DashboardContent({
   const [data, setData] = useState<DashboardOverview>(initialData);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ── Poll the overview endpoint every 30s (skip when tab is hidden) ──
+  // Poll the overview endpoint every 30s (skip when tab is hidden)
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
@@ -93,7 +96,7 @@ export function DashboardContent({
         const fresh = (await res.json()) as DashboardOverview;
         if (!cancelled) setData(fresh);
       } catch {
-        // silent — next tick will retry
+        /* silent */
       } finally {
         if (!cancelled) setRefreshing(false);
       }
@@ -105,7 +108,23 @@ export function DashboardContent({
     };
   }, []);
 
-  const { kpis, goal, sparklines, leadsByDay14d, recentLeads, campaigns, channelDistribution, activity } = data;
+  const {
+    kpis,
+    goal,
+    sparklines,
+    leadsByDay14d,
+    recentLeads,
+    campaigns,
+    channelDistribution,
+    activity,
+  } = data;
+
+  // First-run experience: when there's literally nothing yet, show a
+  // dedicated welcome screen instead of a wall of zeros.
+  const isEmpty =
+    kpis.totalLeads === 0 &&
+    kpis.activeConversations === 0 &&
+    kpis.messagesThisMonth === 0;
 
   const kpiCards = useMemo(
     () => [
@@ -158,242 +177,296 @@ export function DashboardContent({
   );
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* ═══ HEADER ═══ */}
-      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-        <div>
-          <h1 className="font-display text-[26px] font-semibold tracking-tight text-foreground">
-            {t("title")}
-          </h1>
-          <p className="text-[13.5px] text-muted-foreground mt-0.5">
-            {t("subtitle")}
-          </p>
-        </div>
-        <LiveIndicator refreshing={refreshing} generatedAt={data.generatedAt} />
-      </header>
+    <div className="space-y-7 animate-fade-in">
+      {/* ═══ HERO HEADER ═══ */}
+      <Hero
+        title={t("title")}
+        subtitle={t("subtitle")}
+        refreshing={refreshing}
+        generatedAt={data.generatedAt}
+      />
 
-      {/* ═══ GOAL HERO ═══ */}
-      <GoalHeroCard goal={goal} />
+      {isEmpty ? (
+        <EmptyDashboard t={t} />
+      ) : (
+        <>
+          {/* ═══ GOAL HERO ═══ */}
+          <GoalHeroCard goal={goal} />
 
-      {/* ═══ KPI GRID ═══ */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 stagger-children">
-        {kpiCards.map(({ key, ...card }) => (
-          <KpiCard key={key} {...card} />
-        ))}
-      </section>
+          {/* ═══ KPI GRID ═══ */}
+          <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 stagger-children">
+            {kpiCards.map(({ key, ...card }) => (
+              <KpiCard key={key} {...card} />
+            ))}
+          </section>
 
-      {/* ═══ CHART + RESPONSE TIME ═══ */}
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 stagger-children">
-        <LeadsChart data={leadsByDay14d} className="xl:col-span-2" />
-        <ResponseTimeCard
-          avgSeconds={kpis.avgResponseSeconds}
-          activeConversations={kpis.activeConversations}
-          messagesToday={kpis.messagesToday}
-        />
-      </section>
-
-      {/* ═══ TWO COLUMNS ═══ */}
-      <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 stagger-children">
-        {/* Recent Leads */}
-        <div className="xl:col-span-3 rounded-2xl border border-border bg-card overflow-hidden">
-          <header className="px-5 pt-5 pb-3 flex items-center justify-between">
-            <div>
-              <h2 className="font-display text-[14px] font-semibold text-foreground">
-                {t("recentLeads.title")}
-              </h2>
-              <p className="text-[11.5px] text-muted-foreground mt-0.5">
-                Últimos leads capturados pelas suas campanhas
-              </p>
-            </div>
-            <Link
-              href="/leads"
-              className="text-[11.5px] text-primary font-medium hover:underline flex items-center gap-0.5"
-            >
-              {t("recentLeads.viewAll")}
-              <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          </header>
-
-          {recentLeads.length === 0 ? (
-            <EmptyState
-              icon={Users}
-              title={t("recentLeads.empty")}
-              hint="Configure uma campanha para começar a receber leads aqui."
+          {/* ═══ CHART + RESPONSE TIME ═══ */}
+          <section className="grid grid-cols-1 xl:grid-cols-3 gap-4 stagger-children">
+            <LeadsChart data={leadsByDay14d} className="xl:col-span-2" />
+            <ResponseTimeCard
+              avgSeconds={kpis.avgResponseSeconds}
+              activeConversations={kpis.activeConversations}
+              messagesToday={kpis.messagesToday}
             />
-          ) : (
-            <ul className="divide-y divide-border/40">
-              {recentLeads.map((lead, idx) => (
-                <li
-                  key={lead.id}
-                  className="px-5 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors animate-fade-in-up"
-                  style={{ animationDelay: `${idx * 40}ms` }}
+          </section>
+
+          {/* ═══ TWO COLUMNS ═══ */}
+          <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 stagger-children">
+            {/* Recent Leads */}
+            <div className="xl:col-span-3 rounded-2xl border border-border bg-card overflow-hidden hover-lift">
+              <header className="px-5 pt-5 pb-3 flex items-center justify-between">
+                <div>
+                  <h2 className="font-display text-[14px] font-semibold text-foreground">
+                    {t("recentLeads.title")}
+                  </h2>
+                  <p className="text-[11.5px] text-muted-foreground mt-0.5">
+                    Últimos leads capturados pelas suas campanhas
+                  </p>
+                </div>
+                <Link
+                  href="/leads"
+                  className="text-[11.5px] text-primary font-medium hover:underline flex items-center gap-0.5"
                 >
-                  <Avatar name={lead.name || lead.phone || lead.email || "??"} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-foreground truncate">
-                      {lead.name || lead.phone || lead.email || tc("noName")}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground truncate">
-                      {lead.email || lead.phone || lead.source.toLowerCase()}
-                    </p>
-                  </div>
-                  <StatusPill status={lead.status} label={ts(lead.status)} />
-                  <span className="text-[10.5px] text-muted-foreground/70 shrink-0 tabular-nums w-8 text-right">
-                    {formatRelative(lead.createdAt)}
+                  {t("recentLeads.viewAll")}
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              </header>
+
+              {recentLeads.length === 0 ? (
+                <EmptyState
+                  icon={Users}
+                  title={t("recentLeads.empty")}
+                  hint="Configure uma campanha para começar a receber leads aqui."
+                />
+              ) : (
+                <ul className="divide-y divide-border/40">
+                  {recentLeads.map((lead, idx) => (
+                    <li
+                      key={lead.id}
+                      className="px-5 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors animate-fade-in-up"
+                      style={{ animationDelay: `${idx * 40}ms` }}
+                    >
+                      <Avatar
+                        name={lead.name || lead.phone || lead.email || "??"}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-foreground truncate">
+                          {lead.name || lead.phone || lead.email || tc("noName")}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground truncate">
+                          {lead.email || lead.phone || lead.source.toLowerCase()}
+                        </p>
+                      </div>
+                      <StatusPill status={lead.status} label={ts(lead.status)} />
+                      <span className="text-[10.5px] text-muted-foreground/70 shrink-0 tabular-nums w-8 text-right">
+                        {formatRelative(lead.createdAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Activity Feed */}
+            <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden hover-lift">
+              <header className="px-5 pt-5 pb-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-display text-[14px] font-semibold text-foreground">
+                    Atividade em tempo real
+                  </h2>
+                  <span className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                    <span className="relative w-1.5 h-1.5 rounded-full bg-primary text-primary pulse-ring" />
+                    ao vivo
                   </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Activity Feed */}
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
-          <header className="px-5 pt-5 pb-3">
-            <div className="flex items-center justify-between">
-              <h2 className="font-display text-[14px] font-semibold text-foreground">
-                Atividade em tempo real
-              </h2>
-              <span className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
-                <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                ao vivo
-              </span>
+                </div>
+                <p className="text-[11.5px] text-muted-foreground mt-0.5">
+                  O que a IA e seus leads fizeram nos últimos minutos
+                </p>
+              </header>
+              <ActivityFeed items={activity} />
             </div>
-            <p className="text-[11.5px] text-muted-foreground mt-0.5">
-              O que a IA e seus leads fizeram nos últimos minutos
-            </p>
-          </header>
-          <ActivityFeed items={activity} />
-        </div>
-      </section>
+          </section>
 
-      {/* ═══ CHANNELS + CAMPAIGNS ═══ */}
-      <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 stagger-children">
-        {/* Channels */}
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-5">
-          <header className="mb-4">
-            <h2 className="font-display text-[14px] font-semibold text-foreground">
-              {t("channels.title")}
-            </h2>
-            <p className="text-[11.5px] text-muted-foreground mt-0.5">
-              Como os leads estão conversando com você
-            </p>
-          </header>
-          {channelDistribution.length === 0 ? (
-            <EmptyState
-              icon={MessageCircle}
-              title={t("channels.empty")}
-              hint="Conecte WhatsApp ou Email para começar."
-              compact
-            />
-          ) : (
-            <ul className="space-y-3">
-              {channelDistribution.map((ch, idx) => {
-                const Icon = CHANNEL_ICON[ch.channel] || MessageCircle;
-                return (
-                  <li
-                    key={ch.channel}
-                    className="flex items-center gap-3 animate-fade-in-up"
-                    style={{ animationDelay: `${idx * 60}ms` }}
-                  >
-                    <div className="w-9 h-9 rounded-lg bg-muted grid place-items-center shrink-0">
-                      <Icon className="w-4 h-4 text-muted-foreground" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[12.5px] font-medium text-foreground">
-                          {ch.channel}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground tabular-nums">
-                          <CountUp value={ch.count} /> · {ch.percentage}%
-                        </span>
-                      </div>
-                      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
-                          style={{ width: `${ch.percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-
-        {/* Campaigns */}
-        <div className="xl:col-span-3 rounded-2xl border border-border bg-card p-5">
-          <header className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="font-display text-[14px] font-semibold text-foreground">
-                {t("campaigns.title")}
-              </h2>
-              <p className="text-[11.5px] text-muted-foreground mt-0.5">
-                Performance das suas campanhas ativas
-              </p>
+          {/* ═══ CHANNELS + CAMPAIGNS ═══ */}
+          <section className="grid grid-cols-1 xl:grid-cols-5 gap-4 stagger-children">
+            <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-5 hover-lift">
+              <header className="mb-4">
+                <h2 className="font-display text-[14px] font-semibold text-foreground">
+                  {t("channels.title")}
+                </h2>
+                <p className="text-[11.5px] text-muted-foreground mt-0.5">
+                  Como os leads estão conversando com você
+                </p>
+              </header>
+              {channelDistribution.length === 0 ? (
+                <EmptyState
+                  icon={MessageCircle}
+                  title={t("channels.empty")}
+                  hint="Conecte WhatsApp ou Email para começar."
+                  compact
+                />
+              ) : (
+                <ul className="space-y-3">
+                  {channelDistribution.map((ch, idx) => {
+                    const Icon = CHANNEL_ICON[ch.channel] || MessageCircle;
+                    return (
+                      <li
+                        key={ch.channel}
+                        className="flex items-center gap-3 animate-fade-in-up"
+                        style={{ animationDelay: `${idx * 60}ms` }}
+                      >
+                        <div className="w-9 h-9 rounded-lg bg-muted grid place-items-center shrink-0">
+                          <Icon className="w-4 h-4 text-muted-foreground" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[12.5px] font-medium text-foreground">
+                              {ch.channel}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground tabular-nums">
+                              <CountUp value={ch.count} /> · {ch.percentage}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                              style={{ width: `${ch.percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
-            <Link
-              href="/campaigns"
-              className="text-[11.5px] text-primary font-medium hover:underline flex items-center gap-0.5"
-            >
-              {tc("viewAll")}
-              <ChevronRight className="w-3.5 h-3.5" />
-            </Link>
-          </header>
-          {campaigns.length === 0 ? (
-            <EmptyState
-              icon={Target}
-              title={t("campaigns.empty")}
-              hint="Crie uma campanha para medir conversões aqui."
-              compact
-            />
-          ) : (
-            <ul className="space-y-2">
-              {campaigns.map((c, idx) => (
-                <li
-                  key={c.id}
-                  className="flex items-center gap-4 p-3 rounded-xl bg-muted/40 hover:bg-muted/60 transition-colors animate-fade-in-up"
-                  style={{ animationDelay: `${idx * 50}ms` }}
+
+            <div className="xl:col-span-3 rounded-2xl border border-border bg-card p-5 hover-lift">
+              <header className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="font-display text-[14px] font-semibold text-foreground">
+                    {t("campaigns.title")}
+                  </h2>
+                  <p className="text-[11.5px] text-muted-foreground mt-0.5">
+                    Performance das suas campanhas ativas
+                  </p>
+                </div>
+                <Link
+                  href="/campaigns"
+                  className="text-[11.5px] text-primary font-medium hover:underline flex items-center gap-0.5"
                 >
-                  <div className="w-1 h-10 rounded-full bg-primary/60 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-foreground truncate">
-                      {c.name}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {c.totalLeads} leads · {c.convertedLeads}{" "}
-                      {t("campaigns.converted")}
-                    </p>
-                  </div>
-                  <ConversionBadge rate={c.conversionRate} />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
+                  {tc("viewAll")}
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              </header>
+              {campaigns.length === 0 ? (
+                <EmptyState
+                  icon={Target}
+                  title={t("campaigns.empty")}
+                  hint="Crie uma campanha para medir conversões aqui."
+                  compact
+                />
+              ) : (
+                <ul className="space-y-2">
+                  {campaigns.map((c, idx) => (
+                    <li
+                      key={c.id}
+                      className="flex items-center gap-4 p-3 rounded-xl bg-muted/40 hover:bg-muted/60 transition-colors animate-fade-in-up"
+                      style={{ animationDelay: `${idx * 50}ms` }}
+                    >
+                      <div className="w-1 h-10 rounded-full bg-primary/60 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-foreground truncate">
+                          {c.name}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {c.totalLeads} leads · {c.convertedLeads}{" "}
+                          {t("campaigns.converted")}
+                        </p>
+                      </div>
+                      <ConversionBadge rate={c.conversionRate} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }
 
 // ══════════════════════════════════════════════
-// GOAL HERO CARD — "Objetivo ativo"
+// HERO HEADER
+// ══════════════════════════════════════════════
+
+function Hero({
+  title,
+  subtitle,
+  refreshing,
+  generatedAt,
+}: {
+  title: string;
+  subtitle: string;
+  refreshing: boolean;
+  generatedAt: string;
+}) {
+  const greeting = useGreeting();
+  return (
+    <header className="relative overflow-hidden rounded-2xl border border-border bg-card px-6 py-6 sm:py-7">
+      {/* Decorative halo */}
+      <div className="pointer-events-none absolute -top-32 -right-32 w-72 h-72 rounded-full bg-primary/15 blur-3xl animate-breathe" />
+      <div className="pointer-events-none absolute -bottom-20 -left-12 w-56 h-56 rounded-full bg-primary/8 blur-3xl animate-breathe" style={{ animationDelay: "2s" }} />
+
+      <div className="relative flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-primary/90">
+            {greeting}
+          </p>
+          <h1 className="font-display text-[28px] sm:text-[32px] font-semibold tracking-tight text-foreground leading-tight mt-1">
+            {title}
+          </h1>
+          <p className="text-[13.5px] text-muted-foreground mt-1.5 max-w-xl">
+            {subtitle}
+          </p>
+        </div>
+
+        <LiveIndicator refreshing={refreshing} generatedAt={generatedAt} />
+      </div>
+    </header>
+  );
+}
+
+function useGreeting() {
+  const [greeting, setGreeting] = useState("");
+  useEffect(() => {
+    const h = new Date().getHours();
+    if (h < 5) setGreeting("Boa madrugada");
+    else if (h < 12) setGreeting("Bom dia");
+    else if (h < 18) setGreeting("Boa tarde");
+    else setGreeting("Boa noite");
+  }, []);
+  return greeting;
+}
+
+// ══════════════════════════════════════════════
+// GOAL HERO CARD
 // ══════════════════════════════════════════════
 
 function GoalHeroCard({ goal }: { goal: GoalProgress }) {
   const t = useTranslations();
   const tGoal = useTranslations("dashboard.goalHero");
 
-  // Empty state — no funnel configured yet
   if (goal.isEmpty || !goal.labelKey) {
     return (
-      <section className="rounded-2xl border border-dashed border-border bg-card p-6 flex flex-col sm:flex-row sm:items-center gap-5">
-        <div className="w-12 h-12 rounded-xl bg-muted grid place-items-center shrink-0">
+      <section className="relative overflow-hidden rounded-2xl border border-dashed border-border bg-card p-6 flex flex-col sm:flex-row sm:items-center gap-5 hover-lift">
+        <div className="pointer-events-none absolute -top-16 -right-16 w-44 h-44 rounded-full bg-muted/40 blur-2xl" />
+        <div className="relative w-12 h-12 rounded-xl bg-muted grid place-items-center shrink-0 animate-bounce-in">
           <Target className="w-5 h-5 text-muted-foreground" />
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="relative flex-1 min-w-0">
+          <p className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
             {tGoal("eyebrowEmpty")}
           </p>
           <h2 className="font-display text-[18px] font-semibold text-foreground mt-0.5">
@@ -405,10 +478,10 @@ function GoalHeroCard({ goal }: { goal: GoalProgress }) {
         </div>
         <Link
           href="/pipeline"
-          className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-[13px] font-semibold hover:opacity-90 transition-all shrink-0"
+          className="relative inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-[13px] font-semibold hover:opacity-90 transition-all shrink-0"
         >
           {tGoal("emptyCta")}
-          <ChevronRight className="w-4 h-4" />
+          <ArrowRight className="w-4 h-4" />
         </Link>
       </section>
     );
@@ -422,12 +495,12 @@ function GoalHeroCard({ goal }: { goal: GoalProgress }) {
 
   return (
     <section className="relative rounded-2xl border border-border bg-card p-6 overflow-hidden">
-      {/* Decorative gradient glow */}
-      <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-primary/10 blur-3xl pointer-events-none" />
+      {/* Decorative glow */}
+      <div className="pointer-events-none absolute -top-32 -right-32 w-80 h-80 rounded-full bg-primary/15 blur-3xl animate-breathe" />
 
-      <div className="relative flex flex-col md:flex-row gap-6 md:items-end md:justify-between">
+      <div className="relative flex flex-col md:flex-row gap-6 md:items-center md:justify-between">
         <div className="flex items-start gap-4 min-w-0 flex-1">
-          <div className="w-11 h-11 rounded-xl bg-primary/10 grid place-items-center shrink-0">
+          <div className="w-11 h-11 rounded-xl bg-primary/10 grid place-items-center shrink-0 animate-bounce-in">
             <Target className="w-5 h-5 text-primary" />
           </div>
           <div className="min-w-0 flex-1">
@@ -447,11 +520,13 @@ function GoalHeroCard({ goal }: { goal: GoalProgress }) {
           </div>
         </div>
 
-        <div className="flex flex-col items-start md:items-end gap-2 shrink-0">
-          <div className="flex items-baseline gap-1.5">
+        {/* Donut + percent */}
+        <div className="flex items-center gap-5 shrink-0">
+          <Donut value={percent} performance={performance} />
+          <div className="text-right">
             <span
               className={cn(
-                "font-display text-[44px] sm:text-[52px] font-semibold leading-none tabular-nums",
+                "block font-display text-[40px] sm:text-[48px] font-semibold leading-none tabular-nums",
                 performance === "good" && "text-primary",
                 performance === "warn" && "text-amber-500",
                 performance === "idle" && "text-muted-foreground"
@@ -459,38 +534,127 @@ function GoalHeroCard({ goal }: { goal: GoalProgress }) {
             >
               <CountUp value={percent} decimals={1} suffix="%" duration={1100} />
             </span>
+            <p className="text-[11px] font-medium text-muted-foreground mt-1.5">
+              {tGoal(`performance.${performance}`)}
+            </p>
+            <Link
+              href="/pipeline"
+              className="text-[11px] text-primary font-medium hover:underline inline-flex items-center gap-0.5 mt-1"
+            >
+              {tGoal("editFunnel")}
+              <ChevronRight className="w-3 h-3" />
+            </Link>
           </div>
-          <p className="text-[11px] font-medium text-muted-foreground">
-            {tGoal(`performance.${performance}`)}
-          </p>
         </div>
       </div>
+    </section>
+  );
+}
 
-      {/* Progress bar */}
-      <div className="relative mt-6">
-        <div className="h-2.5 rounded-full bg-muted overflow-hidden">
-          <div
-            className={cn(
-              "h-full rounded-full transition-all duration-1000 ease-out",
-              performance === "good" && "bg-primary",
-              performance === "warn" && "bg-amber-500",
-              performance === "idle" && "bg-muted-foreground/40"
-            )}
-            style={{ width: `${percent}%` }}
-          />
+function Donut({
+  value,
+  performance,
+}: {
+  value: number;
+  performance: "good" | "warn" | "idle";
+}) {
+  const ringColor =
+    performance === "good"
+      ? "hsl(var(--primary))"
+      : performance === "warn"
+        ? "rgb(245 158 11)"
+        : "hsl(var(--muted-foreground) / 0.5)";
+  return (
+    <div
+      className="relative w-[90px] h-[90px] rounded-full grid place-items-center"
+      style={{
+        background: `conic-gradient(${ringColor} ${value}%, hsl(var(--muted)) 0)`,
+      }}
+    >
+      <div className="absolute inset-1 rounded-full bg-card grid place-items-center" />
+      <div className="relative w-3 h-3 rounded-full bg-primary/20 grid place-items-center">
+        <div className="w-1.5 h-1.5 rounded-full bg-primary" />
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// EMPTY DASHBOARD (first-run experience)
+// ══════════════════════════════════════════════
+
+function EmptyDashboard({ t }: { t: ReturnType<typeof useTranslations> }) {
+  const steps = [
+    {
+      icon: Brain,
+      titleKey: "empty.step1Title",
+      descKey: "empty.step1Desc",
+      href: "/pipeline",
+      ctaKey: "empty.step1Cta",
+    },
+    {
+      icon: Plug,
+      titleKey: "empty.step2Title",
+      descKey: "empty.step2Desc",
+      href: "/channels/whatsapp",
+      ctaKey: "empty.step2Cta",
+    },
+    {
+      icon: Target,
+      titleKey: "empty.step3Title",
+      descKey: "empty.step3Desc",
+      href: "/campaigns",
+      ctaKey: "empty.step3Cta",
+    },
+  ];
+  return (
+    <section className="space-y-6">
+      <div className="relative overflow-hidden rounded-3xl border border-border bg-card px-6 py-10 sm:py-14 text-center">
+        <div className="pointer-events-none absolute -top-24 -right-24 w-72 h-72 rounded-full bg-primary/15 blur-3xl animate-breathe" />
+        <div className="pointer-events-none absolute -bottom-20 -left-20 w-72 h-72 rounded-full bg-primary/10 blur-3xl animate-breathe" style={{ animationDelay: "1.5s" }} />
+
+        <div className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 text-primary mb-5 animate-bounce-in animate-float">
+          <Rocket className="w-7 h-7" />
         </div>
-        <div className="flex items-center justify-between mt-2">
-          <span className="text-[10.5px] text-muted-foreground tabular-nums">
-            {goal.achieved} / {goal.total}
-          </span>
+
+        <h2 className="relative font-display text-[24px] sm:text-[28px] font-semibold tracking-tight text-foreground mb-2">
+          {t("empty.heroTitle")}
+        </h2>
+        <p className="relative text-[14px] text-muted-foreground max-w-lg mx-auto leading-relaxed">
+          {t("empty.heroSubtitle")}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 stagger-children">
+        {steps.map((s, i) => (
           <Link
-            href="/pipeline"
-            className="text-[11.5px] text-primary font-medium hover:underline inline-flex items-center gap-0.5"
+            key={s.titleKey}
+            href={s.href}
+            className="group relative overflow-hidden rounded-2xl border border-border bg-card p-5 hover-lift block"
           >
-            {tGoal("editFunnel")}
-            <ChevronRight className="w-3.5 h-3.5" />
+            <div className="absolute top-0 right-0 w-20 h-20 rounded-full bg-primary/10 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative">
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary grid place-items-center group-hover:scale-110 transition-transform">
+                  <s.icon className="w-5 h-5" />
+                </div>
+                <span className="text-[11px] font-bold text-muted-foreground/40 tabular-nums">
+                  0{i + 1}
+                </span>
+              </div>
+              <h3 className="font-display text-[14.5px] font-semibold text-foreground mb-1">
+                {t(s.titleKey)}
+              </h3>
+              <p className="text-[12px] text-muted-foreground leading-relaxed mb-3">
+                {t(s.descKey)}
+              </p>
+              <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-primary">
+                {t(s.ctaKey)}
+                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+              </span>
+            </div>
           </Link>
-        </div>
+        ))}
       </div>
     </section>
   );
@@ -502,26 +666,30 @@ function GoalHeroCard({ goal }: { goal: GoalProgress }) {
 
 type Tone = "indigo" | "amber" | "emerald" | "primary";
 
-const TONE_STYLES: Record<Tone, { bg: string; fg: string; stroke: string }> = {
+const TONE_STYLES: Record<Tone, { bg: string; fg: string; stroke: string; glow: string }> = {
   indigo: {
     bg: "bg-blue-500/10",
     fg: "text-blue-500",
     stroke: "stroke-blue-500",
+    glow: "from-blue-500/15",
   },
   amber: {
     bg: "bg-amber-500/10",
     fg: "text-amber-500",
     stroke: "stroke-amber-500",
+    glow: "from-amber-500/15",
   },
   emerald: {
     bg: "bg-emerald-500/10",
     fg: "text-emerald-500",
     stroke: "stroke-emerald-500",
+    glow: "from-emerald-500/15",
   },
   primary: {
     bg: "bg-primary/10",
     fg: "text-primary",
     stroke: "stroke-primary",
+    glow: "from-primary/20",
   },
 };
 
@@ -546,11 +714,19 @@ function KpiCard({
 }) {
   const toneStyle = TONE_STYLES[tone];
   return (
-    <div className="group relative rounded-2xl border border-border bg-card p-4 hover:border-primary/30 hover:shadow-[0_0_0_1px_rgba(185,244,149,0.05)] transition-all overflow-hidden">
-      <div className="flex items-start justify-between mb-3">
+    <div className="group relative rounded-2xl border border-border bg-card p-4 hover-lift overflow-hidden">
+      {/* Hover glow */}
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0 bg-gradient-to-br to-transparent opacity-0 group-hover:opacity-100 transition-opacity",
+          toneStyle.glow
+        )}
+      />
+
+      <div className="relative flex items-start justify-between mb-3">
         <div
           className={cn(
-            "w-9 h-9 rounded-xl grid place-items-center transition-transform group-hover:scale-110",
+            "w-10 h-10 rounded-xl grid place-items-center transition-transform group-hover:scale-110 animate-bounce-in",
             toneStyle.bg
           )}
         >
@@ -559,15 +735,15 @@ function KpiCard({
         {change !== null && change !== 0 && <ChangePill value={change} />}
       </div>
 
-      <p className="font-display text-[28px] font-semibold text-foreground leading-none tabular-nums">
+      <p className="relative font-display text-[30px] font-semibold text-foreground leading-none tabular-nums">
         <CountUp
           value={value}
           suffix={format === "percent" ? "%" : ""}
           decimals={format === "percent" ? 1 : 0}
         />
       </p>
-      <p className="text-[11.5px] text-foreground/80 mt-1.5 font-medium">{label}</p>
-      <p className="text-[10.5px] text-muted-foreground/80 mt-0.5">{sub}</p>
+      <p className="relative text-[12px] text-foreground/80 mt-2 font-medium">{label}</p>
+      <p className="relative text-[10.5px] text-muted-foreground/80 mt-0.5">{sub}</p>
 
       {series && series.some((s) => s.count > 0) && (
         <Sparkline
@@ -580,7 +756,7 @@ function KpiCard({
 }
 
 // ══════════════════════════════════════════════
-// LEADS CHART (14 days area chart, SVG inline)
+// LEADS CHART (14d area, animated path draw)
 // ══════════════════════════════════════════════
 
 function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: string }) {
@@ -606,13 +782,12 @@ function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: s
     .join(" ");
   const areaPath = `${linePath} L${points[points.length - 1]?.x.toFixed(1) ?? 0},${(H - pad.bottom).toFixed(1)} L${points[0]?.x.toFixed(1) ?? 0},${(H - pad.bottom).toFixed(1)} Z`;
 
-  // Day labels every ~3rd tick to avoid clutter
   const labels = points
     .map((p, i) => ({ p, show: i === 0 || i === points.length - 1 || i % 3 === 0 }))
     .filter((x) => x.show);
 
   return (
-    <div className={cn("rounded-2xl border border-border bg-card p-5", className)}>
+    <div className={cn("rounded-2xl border border-border bg-card p-5 hover-lift", className)}>
       <header className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="font-display text-[14px] font-semibold text-foreground">
@@ -635,12 +810,11 @@ function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: s
         >
           <defs>
             <linearGradient id="leadsArea" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.35" />
+              <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.4" />
               <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
             </linearGradient>
           </defs>
 
-          {/* Subtle grid line at midline */}
           <line
             x1={pad.left}
             x2={W - pad.right}
@@ -651,7 +825,7 @@ function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: s
             strokeWidth={1}
           />
 
-          <path d={areaPath} fill="url(#leadsArea)" />
+          <path d={areaPath} fill="url(#leadsArea)" className="animate-fade-in" style={{ animationDelay: "300ms" }} />
           <path
             d={linePath}
             fill="none"
@@ -659,6 +833,7 @@ function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: s
             strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
+            className="animate-draw"
           />
 
           {points.map((p, i) => (
@@ -670,6 +845,8 @@ function LeadsChart({ data, className }: { data: SparklinePoint[]; className?: s
               fill="hsl(var(--primary))"
               stroke="hsl(var(--card))"
               strokeWidth={1.5}
+              className="animate-fade-in"
+              style={{ animationDelay: `${800 + i * 30}ms`, opacity: 0 }}
             />
           ))}
 
@@ -707,12 +884,18 @@ function ResponseTimeCard({
 }) {
   const hasData = avgSeconds > 0;
   const label = hasData ? formatDuration(avgSeconds) : "—";
-  const benchmark = avgSeconds > 0 && avgSeconds < 60 ? "instantâneo" : avgSeconds < 300 ? "abaixo de 5 min" : "acima de 5 min";
+  const benchmark =
+    avgSeconds > 0 && avgSeconds < 60
+      ? "instantâneo"
+      : avgSeconds < 300
+        ? "abaixo de 5 min"
+        : "acima de 5 min";
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 flex flex-col">
-      <header className="flex items-center gap-2 mb-3">
-        <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center">
+    <div className="relative rounded-2xl border border-border bg-card p-5 flex flex-col overflow-hidden hover-lift">
+      <div className="pointer-events-none absolute -top-16 -right-16 w-40 h-40 rounded-full bg-primary/10 blur-2xl" />
+      <header className="relative flex items-center gap-2 mb-3">
+        <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center animate-bounce-in">
           <Zap className="w-4 h-4" />
         </div>
         <div>
@@ -723,7 +906,7 @@ function ResponseTimeCard({
         </div>
       </header>
 
-      <div className="flex items-end gap-2 mb-4">
+      <div className="relative flex items-end gap-2 mb-4">
         <span className="font-display text-[36px] font-semibold text-foreground leading-none tabular-nums">
           {label}
         </span>
@@ -734,7 +917,7 @@ function ResponseTimeCard({
         )}
       </div>
 
-      <div className="mt-auto space-y-2.5">
+      <div className="relative mt-auto space-y-2.5">
         <MiniStat
           icon={Headphones}
           label="Conversas ativas agora"
@@ -788,17 +971,28 @@ function ActivityFeed({ items }: { items: ActivityItem[] }) {
     );
   }
   return (
-    <ul className="px-5 pb-5 space-y-3.5">
+    <ol className="relative px-5 pb-5 space-y-0">
+      {/* timeline rail */}
+      <span className="absolute left-[33px] top-2 bottom-4 w-px bg-border/60" />
       {items.map((item, idx) => {
         const Icon = EVENT_ICON[item.event] || Activity;
+        const isLatest = idx === 0;
         return (
           <li
             key={item.id}
-            className="flex items-start gap-3 animate-fade-in-up"
-            style={{ animationDelay: `${idx * 40}ms` }}
+            className="relative flex items-start gap-3 py-3 animate-slide-in-right"
+            style={{ animationDelay: `${idx * 40}ms`, opacity: 0 }}
           >
-            <div className="w-7 h-7 rounded-full bg-muted grid place-items-center shrink-0 mt-0.5">
-              <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+            <div
+              className={cn(
+                "relative w-7 h-7 rounded-full grid place-items-center shrink-0 mt-0.5 z-10",
+                isLatest ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
+              )}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {isLatest && (
+                <span className="absolute inset-0 rounded-full bg-primary/30 pulse-ring" />
+              )}
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[12.5px] text-foreground leading-snug">
@@ -811,7 +1005,7 @@ function ActivityFeed({ items }: { items: ActivityItem[] }) {
           </li>
         );
       })}
-    </ul>
+    </ol>
   );
 }
 
@@ -855,14 +1049,23 @@ function LiveIndicator({
     return () => clearInterval(id);
   }, []);
   return (
-    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-      <span
-        className={cn(
-          "w-1.5 h-1.5 rounded-full",
-          refreshing ? "bg-amber-500" : "bg-primary animate-pulse"
-        )}
-      />
-      <span>
+    <div className="inline-flex items-center gap-2.5 px-3 h-9 rounded-full border border-border bg-card/60 backdrop-blur shrink-0">
+      <span className="relative flex w-2 h-2">
+        <span
+          className={cn(
+            "absolute inset-0 rounded-full",
+            refreshing ? "bg-amber-500" : "bg-primary",
+            !refreshing && "pulse-ring text-primary"
+          )}
+        />
+        <span
+          className={cn(
+            "relative w-2 h-2 rounded-full",
+            refreshing ? "bg-amber-500" : "bg-primary"
+          )}
+        />
+      </span>
+      <span className="text-[11px] text-muted-foreground">
         atualizado {formatRelative(generatedAt)} atrás
       </span>
     </div>
@@ -875,16 +1078,10 @@ function ChangePill({ value }: { value: number }) {
     <span
       className={cn(
         "inline-flex items-center gap-0.5 text-[10.5px] font-semibold px-1.5 py-0.5 rounded-md",
-        up
-          ? "bg-emerald-500/10 text-emerald-500"
-          : "bg-red-500/10 text-red-500"
+        up ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
       )}
     >
-      {up ? (
-        <ArrowUpRight className="w-3 h-3" />
-      ) : (
-        <ArrowDownRight className="w-3 h-3" />
-      )}
+      {up ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
       {Math.abs(value)}%
     </span>
   );
@@ -924,20 +1121,21 @@ function StatusPill({ status, label }: { status: string; label: string }) {
 }
 
 function Avatar({ name }: { name: string }) {
-  const ini = name
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2) || "??";
+  const ini =
+    name
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2) || "??";
   const hue = hashHue(name);
   return (
     <div
-      className="w-9 h-9 rounded-full grid place-items-center shrink-0 text-[11px] font-semibold text-foreground"
+      className="w-9 h-9 rounded-full grid place-items-center shrink-0 text-[11px] font-semibold ring-1 ring-border/60"
       style={{
-        backgroundColor: `hsl(${hue}, 60%, 20% / 0.5)`,
-        color: `hsl(${hue}, 70%, 70%)`,
+        background: `linear-gradient(135deg, hsl(${hue}, 60%, 25% / 0.5), hsl(${(hue + 40) % 360}, 60%, 18% / 0.5))`,
+        color: `hsl(${hue}, 70%, 75%)`,
       }}
     >
       {ini}
@@ -976,6 +1174,7 @@ function Sparkline({
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
+        className="animate-draw"
       />
     </svg>
   );
@@ -994,14 +1193,12 @@ function EmptyState({
 }) {
   return (
     <div className={cn("text-center", compact ? "py-6" : "py-10 px-5")}>
-      <div className="w-10 h-10 rounded-xl bg-muted grid place-items-center mx-auto mb-3">
+      <div className="w-10 h-10 rounded-xl bg-muted grid place-items-center mx-auto mb-3 animate-bounce-in">
         <Icon className="w-4 h-4 text-muted-foreground" />
       </div>
       <p className="text-[13px] font-medium text-foreground mb-1">{title}</p>
       {hint && (
-        <p className="text-[11.5px] text-muted-foreground max-w-xs mx-auto">
-          {hint}
-        </p>
+        <p className="text-[11.5px] text-muted-foreground max-w-xs mx-auto">{hint}</p>
       )}
     </div>
   );
@@ -1037,7 +1234,6 @@ function CountUp({
     const tick = (t: number) => {
       const elapsed = t - start;
       const progress = Math.min(1, elapsed / duration);
-      // easeOutCubic
       const eased = 1 - Math.pow(1 - progress, 3);
       const next = from + (to - from) * eased;
       setDisplay(next);
@@ -1055,7 +1251,6 @@ function CountUp({
     decimals > 0
       ? display.toFixed(decimals)
       : Math.round(display).toLocaleString("pt-BR");
-
   return (
     <>
       {formatted}

@@ -226,6 +226,19 @@
   "dashboard": {
     "title": "Painel",
     "subtitle": "Visão geral do seu marketing digital com IA",
+    "empty": {
+      "heroTitle": "Sua plataforma está pronta",
+      "heroSubtitle": "Configure sua IA em três passos rápidos e comece a converter leads ainda hoje.",
+      "step1Title": "Configure o funil",
+      "step1Desc": "Defina o objetivo da IA, o canal e o tom da conversa.",
+      "step1Cta": "Configurar funil",
+      "step2Title": "Conecte um canal",
+      "step2Desc": "WhatsApp, e-mail ou SMS — escolha por onde a IA vai falar.",
+      "step2Cta": "Conectar canal",
+      "step3Title": "Cadastre uma campanha",
+      "step3Desc": "Suba o anúncio para a IA entender o que foi prometido ao lead.",
+      "step3Cta": "Criar campanha"
+    },
     "goalHero": {
       "eyebrow": "Objetivo ativo da sua IA",
       "eyebrowEmpty": "Objetivo ainda não definido",

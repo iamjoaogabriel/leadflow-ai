@@ -226,6 +226,19 @@
   "dashboard": {
     "title": "Panel",
     "subtitle": "Visión general de tu marketing digital con IA",
+    "empty": {
+      "heroTitle": "Tu plataforma está lista",
+      "heroSubtitle": "Configura tu IA en tres pasos rápidos y empieza a convertir leads hoy mismo.",
+      "step1Title": "Configura el embudo",
+      "step1Desc": "Define el objetivo de la IA, el canal y el tono.",
+      "step1Cta": "Configurar embudo",
+      "step2Title": "Conecta un canal",
+      "step2Desc": "WhatsApp, email o SMS — elige por dónde hablará la IA.",
+      "step2Cta": "Conectar canal",
+      "step3Title": "Registra una campaña",
+      "step3Desc": "Sube el anuncio para que la IA entienda qué se le prometió al lead.",
+      "step3Cta": "Crear campaña"
+    },
     "goalHero": {
       "eyebrow": "Objetivo activo de tu IA",
       "eyebrowEmpty": "Objetivo aún no definido",
