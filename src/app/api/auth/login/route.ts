@@ -1,29 +1,19 @@
 // src/app/api/auth/login/route.ts
 //
-// Email/password login. Authenticates against Supabase Auth (the same
-// system the OAuth callback uses), sets the SSR cookies and decides where
-// to redirect based on whether the account already finished onboarding.
+// Email/password login. Uses the SAME createServerClient that getSession()
+// uses, so the cookies it sets are exactly what the rest of the app reads.
+// (Earlier versions set sb-access-token/sb-refresh-token manually, but
+// auth-helpers-nextjs writes its own cookie names like sb-<ref>-auth-token —
+// the manual cookies were ignored, causing the post-login redirect loop.)
 
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import prisma from "@/lib/db/prisma";
 import { rateLimit, getClientIp } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
 const log = logger.child({ module: "auth/login" });
-
-let _supabase: SupabaseClient | null = null;
-function supabaseAdmin(): SupabaseClient {
-  if (_supabase) return _supabase;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Supabase env not configured");
-  _supabase = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-  return _supabase;
-}
 
 export async function POST(req: NextRequest) {
   // Rate limit: 10 login attempts per minute per IP
@@ -35,7 +25,10 @@ export async function POST(req: NextRequest) {
   if (!rl.allowed) {
     return NextResponse.json(
       { error: "rate_limited" },
-      { status: 429, headers: { "retry-after": String(Math.ceil(rl.resetInMs / 1000)) } }
+      {
+        status: 429,
+        headers: { "retry-after": String(Math.ceil(rl.resetInMs / 1000)) },
+      }
     );
   }
 
@@ -48,60 +41,62 @@ export async function POST(req: NextRequest) {
     const password = body.password || "";
 
     if (!email || !password) {
-      return NextResponse.json(
-        { error: "missing_credentials" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "missing_credentials" }, { status: 400 });
     }
 
-    const { data, error } = await supabaseAdmin().auth.signInWithPassword({
+    const cookieStore = await cookies();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll(cookiesToSet) {
+            for (const { name, value, options } of cookiesToSet) {
+              cookieStore.set(name, value, options);
+            }
+          },
+        },
+      }
+    );
+
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (error || !data.session || !data.user) {
-      log.info("login failed", { email, reason: error?.message || "no_session" });
+      log.info("login failed", { email, reason: error?.message });
       return NextResponse.json(
         { error: "invalid_credentials" },
         { status: 401 }
       );
     }
 
-    // Find local user / account so we know where to redirect
+    // Cookies were already written by the supabase client via the setAll
+    // callback above — nothing else to do here.
+
+    // Resolve where to send the user after login
     const dbUser = await prisma.user.findUnique({
       where: { supabaseId: data.user.id },
       include: {
         memberships: {
           take: 1,
-          include: { account: { select: { onboardingCompletedAt: true, locale: true } } },
+          include: {
+            account: {
+              select: { onboardingCompletedAt: true, locale: true },
+            },
+          },
         },
       },
     });
-
     const account = dbUser?.memberships[0]?.account;
     const accountLocale = account?.locale || "pt";
-    const onboardingDone = !!account?.onboardingCompletedAt;
-    const redirectTo = onboardingDone
+    const redirectTo = account?.onboardingCompletedAt
       ? `/${accountLocale}`
       : `/${accountLocale}/onboarding`;
-
-    // Set SSR cookies — same names the middleware reads
-    const cookieStore = await cookies();
-    const secure = process.env.NODE_ENV === "production";
-    cookieStore.set("sb-access-token", data.session.access_token, {
-      httpOnly: true,
-      secure,
-      sameSite: "lax",
-      maxAge: 60 * 60,
-      path: "/",
-    });
-    cookieStore.set("sb-refresh-token", data.session.refresh_token, {
-      httpOnly: true,
-      secure,
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24 * 30,
-      path: "/",
-    });
 
     return NextResponse.json({
       success: true,
