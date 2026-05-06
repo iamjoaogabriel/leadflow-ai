@@ -11,6 +11,7 @@ import {
   getIntegrationStatus,
 } from "@/lib/integrations/google-calendar";
 import { getIntegrationStatus as getMetaStatus } from "@/lib/integrations/meta";
+import { resolveLanguage, type ResolvedLanguage } from "@/lib/ai-engine/language";
 
 type Channel = "WHATSAPP" | "EMAIL" | "SMS";
 
@@ -28,6 +29,10 @@ export interface FirstContactParams {
   campaignInfo?: string;
   channel: Channel;
   leadMetadata?: Record<string, unknown>;
+  /** Country (ISO-2) of the campaign that brought this lead — drives language */
+  campaignCountry?: string;
+  /** Optional explicit language override coming from the campaign */
+  campaignLanguage?: string;
 }
 
 export interface GenerateResponseParams {
@@ -41,6 +46,8 @@ export interface GenerateResponseParams {
   currentMessage: string;
   channel: Channel;
   leadMetadata?: Record<string, unknown>;
+  campaignCountry?: string;
+  campaignLanguage?: string;
 }
 
 export interface AIResponseResult {
@@ -91,7 +98,18 @@ export class AIEngine {
       params.leadMetadata
     );
 
-    const systemPrompt = buildFirstContactSystemPrompt(cfg, params, businessContext);
+    const language = resolveLanguage({
+      personaLanguage: personaField(cfg.persona, "language", "auto") as string,
+      campaignLanguage: params.campaignLanguage,
+      campaignCountry: params.campaignCountry,
+    });
+
+    const systemPrompt = buildFirstContactSystemPrompt(
+      cfg,
+      params,
+      businessContext,
+      language
+    );
     const userTurn = buildFirstContactUserTurn(params);
 
     const reply = await callLLM(cfg, systemPrompt, [
@@ -133,11 +151,18 @@ export class AIEngine {
       params.leadMetadata
     );
 
+    const language = resolveLanguage({
+      personaLanguage: personaField(cfg.persona, "language", "auto") as string,
+      campaignLanguage: params.campaignLanguage,
+      campaignCountry: params.campaignCountry,
+    });
+
     const systemPrompt = buildResponseSystemPrompt(cfg, params, {
       escalation,
       conversion,
       schedulingContext,
       businessContext,
+      language,
     });
 
     const messages: HistoryEntry[] = [
@@ -285,56 +310,118 @@ function personaField<T = string>(
   return (v === undefined || v === null || v === "" ? fallback : v) as T;
 }
 
-function commonPreamble(cfg: LoadedConfig, channel: Channel): string {
+function commonPreamble(
+  cfg: LoadedConfig,
+  channel: Channel,
+  resolved: ResolvedLanguage
+): string {
   const aiName = personaField(cfg.persona, "aiName", "Assistente");
   const aiRole = personaField(cfg.persona, "aiRole", "Consultor de vendas");
   const tone = personaField(cfg.persona, "tone", "professional_friendly");
-  const language = personaField(cfg.persona, "language", "auto");
 
   const languageRule =
-    language === "auto"
-      ? "Detecte automaticamente o idioma da primeira mensagem do lead e responda SEMPRE no mesmo idioma."
-      : `Responda sempre em: ${language}.`;
+    resolved.code === "auto"
+      ? "Detecte automaticamente o idioma da última mensagem do lead e responda SEMPRE no mesmo idioma."
+      : `Responda SEMPRE em ${resolved.name}. Se o lead escrever em outro idioma, continue em ${resolved.name} a menos que ele peça explicitamente para trocar.`;
 
-  return `Você é ${aiName}, ${aiRole}.
+  return `Você é ${aiName}, ${aiRole}. Você é uma PESSOA REAL. JAMAIS revele que é uma IA, robô, bot ou automação. Se o lead perguntar, diga que trabalha na equipe há anos.
 
-PERSONA E REGRAS DE NEGÓCIO:
+TREINAMENTO DA IA (seu contexto de atuação):
 ${cfg.systemPrompt}
 
 TOM: ${String(tone).replace(/_/g, " ")}
 IDIOMA: ${languageRule}
-CANAL: ${channel}
+CANAL: ${channel === "WHATSAPP" ? "WhatsApp (mensagem curta e informal)" : channel === "EMAIL" ? "Email" : "SMS (ultra-curto)"}
 
-COMPORTAMENTO OBRIGATÓRIO:
-- Pareça um humano real. Nunca diga que é uma IA a menos que o lead pergunte diretamente.
-- Mensagens curtas e naturais (no máximo 2–3 parágrafos curtos). No WhatsApp, prefira 1–2 frases por envio.
-- Nada de listas com bullet points a menos que seja absolutamente necessário.
-- Nunca invente preço, prazo, política ou fato que você não tenha certeza — se não souber, diga que vai confirmar.
-- Não repita a mensagem anterior, não use saudação repetida ("olá" em toda resposta).
-- Evite excesso de emojis e exclamações; use no máximo 1 emoji por mensagem, só quando fizer sentido.`;
+════════════════════════════════════════════════════
+FORMATO DE RESPOSTA — REGRA MAIS IMPORTANTE
+════════════════════════════════════════════════════
+Você NUNCA envia um textão em um balão só. No WhatsApp uma pessoa real manda várias mensagens curtas em sequência.
+
+Separe cada balão com o delimitador literal: |||
+
+Regras:
+- Máximo 3 balões por resposta. Cada balão: 1 a 2 frases curtas.
+- Pense como se você estivesse digitando no celular: uma ideia por balão.
+- NUNCA envie listas numeradas, bullet points ou markdown (* ou - ou #). Isso é WhatsApp, não é documento.
+- Se a resposta é curta (uma frase simples), 1 balão só está ótimo — não force a divisão.
+- Emoji: no máximo 1 por resposta inteira (não por balão), e só se fizer sentido no contexto.
+
+Exemplo bom:
+Tudo certo ${aiName ? "" : ""}|||me conta rapidinho o que você procura?
+
+Exemplo ruim (NÃO faça isso):
+Olá! Tudo bem? Obrigado pelo seu contato. Gostaria de entender melhor o que você está buscando para poder te ajudar da melhor forma possível.
+
+════════════════════════════════════════════════════
+VÍCIOS DE LINGUAGEM PROIBIDOS (frases banidas)
+════════════════════════════════════════════════════
+Você NUNCA, em hipótese NENHUMA, usa estas frases ou variações delas:
+- "Estou à disposição" / "Fico à disposição" / "Ficamos à disposição"
+- "Qualquer dúvida me chama" / "Qualquer coisa me avisa"
+- "Não hesite em perguntar"
+- "Estou aqui para ajudar"
+- "Pode contar comigo"
+- "Fico no aguardo"
+- "Espero ter ajudado"
+- "Foi um prazer"
+
+Se precisar encerrar uma mensagem, use SUBSTÂNCIA ou uma próxima ação concreta:
+- BOM: "Me conta depois o que achou."
+- BOM: "Assim que você olhar, me dá um retorno."
+- BOM: "Vou te mandar mais detalhes em seguida."
+- RUIM: qualquer frase da lista acima.
+
+════════════════════════════════════════════════════
+COMPORTAMENTO
+════════════════════════════════════════════════════
+- Nunca repita a saudação. Se você já disse "oi" antes, NÃO diga de novo. Entra direto no assunto.
+- Nunca repita textualmente o que o lead acabou de falar. Avance a conversa.
+- Nunca invente preço, prazo, política ou fato que não está no seu treinamento. Se não souber, diga "vou confirmar e te retorno".
+- Nunca use o nome do lead em TODA mensagem — use ocasionalmente.
+- Nunca diga que não consegue ouvir/processar áudio — o sistema já transcreveu pra você.
+- Nunca envie o mesmo link duas vezes na mesma conversa.
+- Nunca faça pergunta que o lead acabou de responder.
+- Pode usar abreviações naturais de WhatsApp (vc, pra, tá, tb, tô) com moderação.
+- Pode começar balão com letra minúscula. Depois de ponto final, maiúscula normal.
+
+════════════════════════════════════════════════════
+FOLLOW-UP PROGRAMADO (opcional)
+════════════════════════════════════════════════════
+Se o lead indicar que volta depois (ex.: "vou ver amanhã", "tô ocupado", "volto em X dias"), inclua no FIM da sua resposta uma tag invisível:
+[FOLLOWUP:Xh]  (onde X é número, sufixo "h" para horas ou "d" para dias)
+
+Exemplos:
+- "vou ver amanhã" → [FOLLOWUP:24h]
+- "tô ocupado agora" → [FOLLOWUP:6h]
+- "volto semana que vem" → [FOLLOWUP:7d]
+
+Essa tag é REMOVIDA antes de enviar ao lead — ele nunca a vê. Só use quando fizer sentido real.`;
 }
 
 function buildFirstContactSystemPrompt(
   cfg: LoadedConfig,
   params: FirstContactParams,
-  businessContext: BusinessContext | null
+  businessContext: BusinessContext | null,
+  language: ResolvedLanguage
 ): string {
   const firstMessageInstruction = personaField(
     cfg.persona,
     "firstMessageInstruction",
-    "Apresente-se de forma curta, confirme o interesse do lead e faça UMA pergunta aberta para começar a qualificação."
+    "Apresente-se de forma curta e humana, confirme o interesse do lead e faça UMA pergunta aberta para começar a qualificação."
   );
 
-  return `${commonPreamble(cfg, params.channel)}
+  return `${commonPreamble(cfg, params.channel, language)}
 ${businessContext ? renderBusinessContext(businessContext) : ""}
 CONTEXTO DESTE LEAD:
-- Nome: ${params.leadName || "desconhecido"}
+- Nome: ${params.leadName || "ainda não sabemos"}
 - Origem: ${params.leadSource}
 ${params.campaignInfo ? `- Campanha: ${params.campaignInfo}` : ""}
+${params.campaignCountry ? `- País da campanha: ${params.campaignCountry}` : ""}
 
 SUA TAREFA AGORA:
-Escrever a PRIMEIRA mensagem para este lead. ${firstMessageInstruction}
-Nunca use templates; cada mensagem deve ser única e personalizada.`;
+Escrever a PRIMEIRA mensagem para este lead, separada em balões com |||. ${firstMessageInstruction}
+NUNCA use template genérico ("Olá! Como posso te ajudar?" é proibido). Cada mensagem deve soar única.`;
 }
 
 function buildResponseSystemPrompt(
@@ -345,6 +432,7 @@ function buildResponseSystemPrompt(
     conversion: boolean;
     schedulingContext?: SchedulingContext | null;
     businessContext?: BusinessContext | null;
+    language: ResolvedLanguage;
   }
 ): string {
   const pipelineGoal = personaField(cfg.persona, "pipelineGoal", "closeSale");
@@ -371,7 +459,7 @@ function buildResponseSystemPrompt(
     ? renderBusinessContext(flags.businessContext)
     : "";
 
-  return `${commonPreamble(cfg, params.channel)}
+  return `${commonPreamble(cfg, params.channel, flags.language)}
 ${businessBlock}
 CONTEXTO DO LEAD:
 - Nome: ${params.leadName || "desconhecido"}
@@ -553,6 +641,57 @@ async function callLLM(
   }
 }
 
+const LLM_TIMEOUT_MS = 30_000;
+const LLM_MAX_RETRIES = 2;
+
+/** fetch wrapper with timeout + exponential-backoff retry on 5xx/network. */
+async function llmFetch(
+  url: string,
+  init: RequestInit,
+  label: string
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), LLM_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { ...init, signal: ac.signal });
+      clearTimeout(timer);
+      // Retry only on transient errors
+      if (res.status >= 500 || res.status === 429) {
+        const body = await res.text().catch(() => "");
+        lastError = new Error(`${label} ${res.status}: ${body.slice(0, 300)}`);
+        if (attempt < LLM_MAX_RETRIES) {
+          await sleep(backoffMs(attempt));
+          continue;
+        }
+        throw lastError;
+      }
+      return res;
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      lastError = err;
+      if (attempt < LLM_MAX_RETRIES) {
+        await sleep(backoffMs(attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new Error(`${label} failed`);
+}
+
+function backoffMs(attempt: number): number {
+  // 400ms, 1200ms, 3600ms — with ±25% jitter
+  const base = 400 * Math.pow(3, attempt);
+  const jitter = base * (Math.random() * 0.5 - 0.25);
+  return Math.max(200, Math.round(base + jitter));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function callOpenAI(
   cfg: LoadedConfig,
   systemPrompt: string,
@@ -561,26 +700,30 @@ async function callOpenAI(
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error("OPENAI_API_KEY missing");
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
+  const res = await llmFetch(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        temperature: cfg.temperature,
+        max_tokens: cfg.maxTokens,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...messages.map((m) => ({ role: m.role, content: m.content })),
+        ],
+      }),
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      temperature: cfg.temperature,
-      max_tokens: cfg.maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
-      ],
-    }),
-  });
+    "OpenAI"
+  );
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`OpenAI ${res.status}: ${body}`);
+    throw new Error(`OpenAI ${res.status}: ${body.slice(0, 300)}`);
   }
 
   const data = (await res.json()) as {
@@ -597,25 +740,29 @@ async function callAnthropic(
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("ANTHROPIC_API_KEY missing");
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
+  const res = await llmFetch(
+    "https://api.anthropic.com/v1/messages",
+    {
+      method: "POST",
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        temperature: cfg.temperature,
+        max_tokens: cfg.maxTokens,
+        system: systemPrompt,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      }),
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      temperature: cfg.temperature,
-      max_tokens: cfg.maxTokens,
-      system: systemPrompt,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    }),
-  });
+    "Anthropic"
+  );
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Anthropic ${res.status}: ${body}`);
+    throw new Error(`Anthropic ${res.status}: ${body.slice(0, 300)}`);
   }
 
   const data = (await res.json()) as { content?: { text?: string }[] };

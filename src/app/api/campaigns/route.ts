@@ -55,6 +55,16 @@ export async function POST(req: NextRequest) {
     const caption = (formData.get("caption") as string) || null;
     const transcription = (formData.get("transcription") as string) || null;
     const file = formData.get("file") as File | null;
+    const countriesRaw = (formData.get("countries") as string) || "[]";
+    const aiLanguage = (formData.get("aiLanguage") as string) || "";
+
+    let countries: string[] = [];
+    try {
+      const parsed = JSON.parse(countriesRaw);
+      if (Array.isArray(parsed)) countries = parsed.filter((c) => typeof c === "string");
+    } catch {
+      countries = [];
+    }
 
     if (!name?.trim()) {
       return NextResponse.json(
@@ -111,6 +121,10 @@ export async function POST(req: NextRequest) {
         mediaUrl,
         mediaFormat,
         transcription: finalTranscription,
+        metadata: {
+          countries,
+          aiLanguage: aiLanguage.trim() || "auto",
+        },
       },
     });
 

@@ -1,16 +1,19 @@
 // src/app/api/auth/register/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import prisma from "@/lib/db/prisma";
-import Stripe from "stripe";
 import { z } from "zod";
+import { getStripe } from "@/lib/billing/stripe";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+let _supabase: SupabaseClient | null = null;
+function supabaseAdmin(): SupabaseClient {
+  if (_supabase) return _supabase;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Supabase env not configured");
+  _supabase = createClient(url, key);
+  return _supabase;
+}
 
 const registerSchema = z.object({
   name: z.string().min(2).max(100),
@@ -46,7 +49,7 @@ export async function POST(req: NextRequest) {
 
     // 2. Create Supabase auth user
     const { data: authData, error: authError } =
-      await supabase.auth.admin.createUser({
+      await supabaseAdmin().auth.admin.createUser({
         email,
         password,
         email_confirm: true,
@@ -61,8 +64,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Create Stripe customer
-    const stripeCustomer = await stripe.customers.create({
+    // 3. Create Stripe customer (lazy)
+    const stripeCustomer = await getStripe().customers.create({
       email,
       name,
       metadata: { company: companyName },
@@ -126,7 +129,7 @@ export async function POST(req: NextRequest) {
     // 6. Create Stripe Checkout session
     const priceId = getPriceId(plan);
 
-    const checkoutSession = await stripe.checkout.sessions.create({
+    const checkoutSession = await getStripe().checkout.sessions.create({
       customer: stripeCustomer.id,
       mode: "subscription",
       payment_method_types: ["card"],

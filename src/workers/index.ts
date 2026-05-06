@@ -13,6 +13,7 @@ import { getChannelProvider } from "@/lib/channels/factory";
 import { WhatsAppProvider } from "@/lib/channels/whatsapp";
 import { queues } from "@/lib/queues";
 import { flushDebounceBuffer, debounceMessage } from "@/lib/debounce";
+import { sendMessagesInParts } from "@/lib/ai-engine/send-parts";
 
 const connection = getQueueConnection();
 type Channel = "WHATSAPP" | "EMAIL" | "SMS";
@@ -37,7 +38,12 @@ const leadWorker = new Worker(
       where: { id: leadId },
       include: {
         campaign: {
-          select: { name: true, transcription: true, description: true },
+          select: {
+            name: true,
+            transcription: true,
+            description: true,
+            metadata: true,
+          },
         },
       },
     });
@@ -46,6 +52,16 @@ const leadWorker = new Worker(
       console.log(`[lead-processing] Lead ${leadId} not NEW, skipping`);
       return;
     }
+
+    const campaignMeta =
+      (lead.campaign?.metadata as Record<string, unknown> | null) || {};
+    const countries = Array.isArray(campaignMeta.countries)
+      ? (campaignMeta.countries as string[])
+      : [];
+    const campaignCountry = countries[0];
+    const campaignLanguage = typeof campaignMeta.aiLanguage === "string"
+      ? (campaignMeta.aiLanguage as string)
+      : undefined;
 
     const campaignInfo = lead.campaign
       ? `Campaign: ${lead.campaign.name}\n${lead.campaign.description || ""}\n${lead.campaign.transcription || ""}`
@@ -58,6 +74,8 @@ const leadWorker = new Worker(
       campaignInfo,
       channel,
       leadMetadata: (lead.metadata as Record<string, unknown>) || undefined,
+      campaignCountry,
+      campaignLanguage,
     });
 
     const contactId =
@@ -86,46 +104,35 @@ const leadWorker = new Worker(
       },
     });
 
-    const dbMessage = await prisma.message.create({
-      data: {
-        accountId,
-        conversationId: conversation.id,
-        direction: "OUTBOUND",
-        content: message,
-        contentType: "TEXT",
-        isAIGenerated: true,
-        status: "PENDING",
-      },
-    });
-
     const provider = await getChannelProvider(accountId, channel);
     if (!provider) {
       console.error(
         `[lead-processing] No ${channel} provider for account ${accountId}`
       );
-      await prisma.message.update({
-        where: { id: dbMessage.id },
-        data: { status: "FAILED" },
-      });
       return;
     }
 
-    const sendOpts = channel === "EMAIL" ? { subject: "Olá!" } : undefined;
-    const result = await provider.send(contactId, message, sendOpts);
-
-    await prisma.message.update({
-      where: { id: dbMessage.id },
-      data: {
-        status: result.success ? "SENT" : "FAILED",
-        externalId: result.externalId || null,
-      },
+    // ── Split the reply into WhatsApp-style bubbles + presence/typing between each ──
+    const sendOpts =
+      channel === "EMAIL" ? ({ subject: "Olá!" } as Record<string, unknown>) : undefined;
+    const { parts, messages, followUpHours } = await sendMessagesInParts({
+      accountId,
+      conversationId: conversation.id,
+      to: contactId,
+      fullText: message,
+      provider,
+      sendOpts,
+      extraMetadata: { role: "first_contact" },
     });
+
+    const firstMessageId = messages[0]?.id ?? null;
+    const anySent = messages.some((m) => m.status === "SENT");
 
     await prisma.lead.update({
       where: { id: leadId },
       data: {
-        status: "CONTACTED",
-        lastContactAt: new Date(),
+        status: anySent ? "CONTACTED" : "NEW",
+        lastContactAt: anySent ? new Date() : undefined,
       },
     });
 
@@ -136,21 +143,23 @@ const leadWorker = new Worker(
         data: {
           leadId,
           channel,
-          success: result.success,
-          messageId: dbMessage.id,
+          success: anySent,
+          messageId: firstMessageId,
+          parts: parts.length,
         },
       },
     });
 
-    // Schedule a 24h follow-up guard
+    // Schedule follow-up: AI-requested delay wins, else default 24h guard
+    const delayMs = (followUpHours ?? 24) * 60 * 60 * 1000;
     await queues.followUp.add(
       "follow-up",
       { leadId, accountId, channel, conversationId: conversation.id },
-      { delay: 24 * 60 * 60 * 1000 }
+      { delay: delayMs }
     );
 
     console.log(
-      `[lead-processing] First contact sent to ${leadId} via ${channel}`
+      `[lead-processing] First contact sent to ${leadId} via ${channel} (${parts.length} parts, followUp ${followUpHours ?? 24}h)`
     );
   },
   { connection, concurrency: 5 }
@@ -281,6 +290,16 @@ const aiWorker = new Worker(
     }));
 
     const lead = conversation.lead;
+    const campaignMeta =
+      (lead.campaign?.metadata as Record<string, unknown> | null) || {};
+    const countries = Array.isArray(campaignMeta.countries)
+      ? (campaignMeta.countries as string[])
+      : [];
+    const campaignCountry = countries[0];
+    const campaignLanguage = typeof campaignMeta.aiLanguage === "string"
+      ? (campaignMeta.aiLanguage as string)
+      : undefined;
+
     const campaignInfo = lead.campaign
       ? `Campaign: ${lead.campaign.name}\n${lead.campaign.transcription || ""}`
       : undefined;
@@ -296,57 +315,53 @@ const aiWorker = new Worker(
       currentMessage: combinedInbound || "(sem conteúdo)",
       channel: channel || "WHATSAPP",
       leadMetadata: (lead.metadata as Record<string, unknown>) || undefined,
+      campaignCountry,
+      campaignLanguage,
     });
 
-    // ── Save OUTBOUND message (pending) ──
-    const dbMessage = await prisma.message.create({
-      data: {
-        accountId,
-        conversationId,
-        direction: "OUTBOUND",
-        content: aiResult.message,
-        contentType: "TEXT",
-        isAIGenerated: true,
-        status: "PENDING",
-        metadata: {
-          tags: aiResult.tags,
-          sentiment: aiResult.sentiment,
-        },
-      },
-    });
-
-    // ── Send via channel ──
+    // ── Send via channel: split in parts + presence between each ──
     const contactId =
       channel === "EMAIL"
         ? lead.email || ""
         : conversation.channelIdentifier || lead.phone || "";
 
     const provider = await getChannelProvider(accountId, channel);
+    let firstMessageId: string | null = null;
+    let followUpHours: number | null = null;
+
     if (provider && contactId) {
-      const result = await provider.send(contactId, aiResult.message);
-      await prisma.message.update({
-        where: { id: dbMessage.id },
-        data: {
-          status: result.success ? "SENT" : "FAILED",
-          externalId: result.externalId || null,
+      const sent = await sendMessagesInParts({
+        accountId,
+        conversationId,
+        to: contactId,
+        fullText: aiResult.message,
+        provider,
+        extraMetadata: {
+          tags: aiResult.tags,
+          sentiment: aiResult.sentiment,
         },
       });
-    } else {
-      await prisma.message.update({
-        where: { id: dbMessage.id },
-        data: { status: "FAILED" },
-      });
+      firstMessageId = sent.messages[0]?.id ?? null;
+      followUpHours = sent.followUpHours;
     }
 
-    // ── Update conversation ──
+    // ── Update conversation sentiment / AI enabled flag ──
     await prisma.conversation.update({
       where: { id: conversationId },
       data: {
-        lastMessageAt: new Date(),
         sentiment: aiResult.sentiment,
         ...(aiResult.isEscalation ? { isAIEnabled: false } : {}),
       },
     });
+
+    // ── Schedule custom follow-up if the AI asked for one ──
+    if (followUpHours && followUpHours > 0) {
+      await queues.followUp.add(
+        "follow-up",
+        { leadId, accountId, channel, conversationId },
+        { delay: followUpHours * 60 * 60 * 1000 }
+      );
+    }
 
     // ── Handle conversion/escalation side effects ──
     if (aiResult.isConversion) {

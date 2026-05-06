@@ -27,6 +27,11 @@ import {
   fetchLeadgenDetails,
   normalizeLeadgenFields,
 } from "@/lib/integrations/meta";
+import { verifyMetaSignature } from "@/lib/webhook-security";
+import { rateLimit, getClientIp } from "@/lib/rate-limit";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ module: "webhook/meta-leadgen" });
 
 // ── GET: verification handshake ─────────────
 export async function GET(req: NextRequest) {
@@ -57,11 +62,34 @@ interface WebhookBody {
 }
 
 export async function POST(req: NextRequest) {
+  // Rate limit by IP — protects against accidental floods
+  const rl = await rateLimit({
+    key: `meta:${getClientIp(req)}`,
+    max: 120,
+    windowSec: 60,
+  });
+  if (!rl.allowed) {
+    log.warn("rate limited", { ip: getClientIp(req) });
+    return NextResponse.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "retry-after": String(Math.ceil(rl.resetInMs / 1000)) } }
+    );
+  }
+
+  // Read raw body ONCE so we can verify the signature and still parse it
+  const raw = await req.text();
+  const signature = req.headers.get("x-hub-signature-256");
+  const sigCheck = verifyMetaSignature(raw, signature);
+  if (!sigCheck.valid) {
+    log.warn("bad signature", { reason: sigCheck.reason });
+    return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
+  }
+
   // Meta expects a 200 fast — process each entry individually and always
   // acknowledge even when one of them fails.
   let body: WebhookBody;
   try {
-    body = (await req.json()) as WebhookBody;
+    body = JSON.parse(raw) as WebhookBody;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }

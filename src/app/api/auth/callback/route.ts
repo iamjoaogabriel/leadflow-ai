@@ -1,16 +1,19 @@
 // src/app/api/auth/callback/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import prisma from "@/lib/db/prisma";
-import Stripe from "stripe";
 import { cookies } from "next/headers";
+import { getStripe } from "@/lib/billing/stripe";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+let _supabase: SupabaseClient | null = null;
+function supabaseAdmin(): SupabaseClient {
+  if (_supabase) return _supabase;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Supabase env not configured");
+  _supabase = createClient(url, key);
+  return _supabase;
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -26,7 +29,7 @@ export async function GET(req: NextRequest) {
   try {
     // Exchange code for session
     const { data: authData, error: authError } =
-      await supabase.auth.exchangeCodeForSession(code);
+      await supabaseAdmin().auth.exchangeCodeForSession(code);
 
     if (authError || !authData.session || !authData.user) {
       console.error("OAuth exchange error:", authError);
@@ -90,12 +93,18 @@ export async function GET(req: NextRequest) {
       slug = `${baseSlug}-${counter}`;
     }
 
-    // Create Stripe customer
-    const stripeCustomer = await stripe.customers.create({
-      email,
-      name,
-      metadata: { source: "oauth", provider },
-    });
+    // Create Stripe customer (lazy — if not configured we skip billing record for OAuth signup)
+    let stripeCustomerId: string | null = null;
+    try {
+      const stripeCustomer = await getStripe().customers.create({
+        email,
+        name,
+        metadata: { source: "oauth", provider },
+      });
+      stripeCustomerId = stripeCustomer.id;
+    } catch (err) {
+      console.warn("[auth/callback] Stripe not configured, skipping customer creation", err);
+    }
 
     // Create everything in a transaction
     const result = await prisma.$transaction(async (tx) => {
@@ -105,7 +114,7 @@ export async function GET(req: NextRequest) {
           slug,
           plan: "FREE",
           locale,
-          stripeCustomerId: stripeCustomer.id,
+          stripeCustomerId,
         },
       });
 

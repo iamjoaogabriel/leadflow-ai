@@ -34,6 +34,7 @@ export default function NewCampaignPage() {
   const [description, setDescription] = useState("");
   const [countries, setCountries] = useState<string[]>([]);
   const [showCountries, setShowCountries] = useState(false);
+  const [aiLanguage, setAiLanguage] = useState<string>("auto");
   const [uploadType, setUploadType] = useState<UploadType>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -93,6 +94,7 @@ export default function NewCampaignPage() {
       if (uploadType === "text") fd.append("type", "TEXT"); else if (uploadType) fd.append("type", uploadType.toUpperCase()); else fd.append("type", "DIGITAL");
       if (textContent) fd.append("transcription", textContent); if (caption) fd.append("caption", caption);
       if (aiAnalysis) fd.append("transcription", aiAnalysis); if (countries.length > 0) fd.append("countries", JSON.stringify(countries));
+      fd.append("aiLanguage", aiLanguage);
       const res = await fetch("/api/campaigns", { method: "POST", body: fd });
       if (res.ok) { router.push("/campaigns"); router.refresh(); }
     } catch {} setSaving(false);
@@ -165,6 +167,32 @@ export default function NewCampaignPage() {
             ))}
           </div>
         )}
+
+        {/* AI Language override */}
+        <div className="pt-3 border-t border-border space-y-2">
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">
+            {t("aiLanguageLabel")}
+          </label>
+          <p className="text-[11px] text-muted-foreground leading-relaxed font-dm-sans">
+            {t("aiLanguageHint")}
+          </p>
+          <select
+            value={aiLanguage}
+            onChange={(e) => setAiLanguage(e.target.value)}
+            className="w-full h-10 px-3 rounded-xl bg-muted border border-transparent text-[13px] text-foreground focus:outline-none focus:border-ring/30 cursor-pointer font-dm-sans"
+          >
+            <option value="auto">{t("aiLanguageAuto")}</option>
+            <option value="pt-BR">🇧🇷 Português (Brasil)</option>
+            <option value="pt">🇵🇹 Português (Portugal)</option>
+            <option value="en">🇺🇸 English</option>
+            <option value="es">🇪🇸 Español</option>
+            <option value="de">🇩🇪 Deutsch</option>
+            <option value="fr">🇫🇷 Français</option>
+            <option value="it">🇮🇹 Italiano</option>
+            <option value="nl">🇳🇱 Nederlands</option>
+            <option value="ja">🇯🇵 日本語</option>
+          </select>
+        </div>
       </div>
 
       {/* Step 3 */}

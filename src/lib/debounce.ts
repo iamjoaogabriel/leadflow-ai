@@ -23,10 +23,31 @@
 
 import { getRedis } from "./redis";
 import { queues } from "./queues";
+import prisma from "@/lib/db/prisma";
 
-const DEBOUNCE_DELAY_MS = 8000;
+const DEFAULT_DEBOUNCE_MS = 8000;
+const MIN_DEBOUNCE_MS = 2000;
+const MAX_DEBOUNCE_MS = 60_000;
 const DEBOUNCE_PREFIX = "debounce:msgs:";
 const DEBOUNCE_JOB_PREFIX = "debounce:job:";
+
+/** Reads `aiConfig.persona.debounceSeconds` for the account and clamps it. */
+async function resolveDebounceMs(accountId: string): Promise<number> {
+  try {
+    const cfg = await prisma.aIConfig.findUnique({
+      where: { accountId },
+      select: { persona: true },
+    });
+    const persona = (cfg?.persona as Record<string, unknown> | null) || {};
+    const raw = persona.debounceSeconds;
+    const seconds = typeof raw === "number" && raw > 0 ? raw : null;
+    if (!seconds) return DEFAULT_DEBOUNCE_MS;
+    const ms = seconds * 1000;
+    return Math.min(MAX_DEBOUNCE_MS, Math.max(MIN_DEBOUNCE_MS, ms));
+  } catch {
+    return DEFAULT_DEBOUNCE_MS;
+  }
+}
 
 /**
  * Add a message to the debounce buffer and reset the timer.
@@ -63,7 +84,8 @@ export async function debounceMessage(opts: {
     }
   }
 
-  // 3. Schedule a NEW debounce job with fresh 8s delay
+  // 3. Schedule a NEW debounce job with fresh delay (per-account configurable)
+  const delayMs = await resolveDebounceMs(opts.accountId);
   const newJobId = `debounce-${opts.conversationId}-${Date.now()}`;
   const job = await queues.aiResponse.add(
     "debounced-respond",
@@ -74,7 +96,7 @@ export async function debounceMessage(opts: {
       channel: opts.channel,
     },
     {
-      delay: DEBOUNCE_DELAY_MS,
+      delay: delayMs,
       jobId: newJobId,
       removeOnComplete: true,
       removeOnFail: 50,
